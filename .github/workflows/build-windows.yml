@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   windows:
@@ -35,6 +36,21 @@ jobs:
           export MC_E2E_BIN="$PWD/dist/win-unpacked/Meeting Copilot.exe"
           export MC_E2E_OUT="$PWD/e2e-out"
           node test/e2e.js
+
+      - name: Post smoke test result on the pull request
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            let r; try { r = JSON.parse(fs.readFileSync('e2e-out/result.json', 'utf8')); } catch { r = { ok: false, error: 'no result.json was written', steps: [] }; }
+            const lines = r.steps.map(s => '- **' + s.name + '**: ' + JSON.stringify(Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'name'))).slice(0, 420));
+            fs.writeFileSync('e2e-summary.md', '### Windows smoke test: ' + (r.ok ? 'passed' : 'failed') + '\n\n' + (r.error ? '    ' + String(r.error).split('\n')[0] + '\n\n' : '') + lines.join('\n') + '\n');
+          "
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file e2e-summary.md
 
       - uses: actions/upload-artifact@v5
         if: always()
