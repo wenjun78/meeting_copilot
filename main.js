@@ -14,6 +14,12 @@ const { ingestFolder } = require('./src/rag/local');
 const shortcuts = require('./src/shortcuts');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
+if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
+
+// One copy at a time: a second launch (double-clicking the shortcut again) brings the open window forward.
+const firstInstance = app.requestSingleInstanceLock();
+if (!firstInstance) app.quit();
+app.on('second-instance', () => { if (win) { win.show(); win.restore(); win.focus(); } });
 
 // net.fetch follows the system proxy settings, which matters on managed work laptops.
 const netFetch = (url, init) => net.fetch(url, init);
@@ -281,6 +287,7 @@ function wireIpc() {
 // ---- app --------------------------------------------------------------------
 
 app.whenReady().then(() => {
+  if (!firstInstance) return;
   const dir = app.getPath('userData');
   const crypto = safeStorage.isEncryptionAvailable()
     ? { encrypt: s => safeStorage.encryptString(s).toString('base64'), decrypt: s => safeStorage.decryptString(Buffer.from(s, 'base64')) }
