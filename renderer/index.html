@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:">
+<title>Meeting Copilot</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="live" id="live" aria-hidden="true"></span>
+    <span class="name">Meeting Copilot</span>
+    <span class="clock" id="clock"></span>
+  </div>
+  <div class="bar-actions">
+    <button id="toggle" class="btn primary">Start listening</button>
+    <button id="compact" class="icon" title="Compact view: answer only" aria-label="Compact view" aria-pressed="false">
+      <svg viewBox="0 0 16 16"><path d="M3 5.5h10M3 8h10M3 10.5h6" /></svg></button>
+    <button id="min" class="icon" title="Minimise" aria-label="Minimise"><svg viewBox="0 0 16 16"><path d="M3.5 11.5h9" /></svg></button>
+    <button id="max" class="icon" title="Maximise" aria-label="Maximise"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg></button>
+    <button id="close" class="icon danger" title="Close" aria-label="Close"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
+  </div>
+</header>
+
+<div class="meters" id="meters" hidden>
+  <div class="meter them"><span>Them</span><i><b id="lvThem"></b></i></div>
+  <div class="meter you"><span>You</span><i><b id="lvYou"></b></i></div>
+  <span class="screen-state" id="screenState"></span>
+</div>
+
+<main>
+  <section class="cue" aria-label="Suggested answer">
+    <p class="asked" id="asked" hidden></p>
+    <article class="card" id="card" aria-live="polite"></article>
+    <div class="sources" id="sources" hidden></div>
+    <div class="cue-actions">
+      <button id="answerNow" class="btn">Answer what they said</button>
+      <button id="answerScreen" class="btn">Answer from the screen</button>
+      <button id="copy" class="btn quiet" hidden>Copy</button>
+    </div>
+    <form id="askForm" class="ask">
+      <input id="askInput" type="text" placeholder="Ask your sources a question" aria-label="Ask your sources a question" autocomplete="off">
+      <button class="btn" type="submit">Ask</button>
+    </form>
+  </section>
+
+  <section class="lower">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="transcript" aria-selected="true">Transcript</button>
+      <button role="tab" data-tab="screen" aria-selected="false">Screen</button>
+      <button role="tab" data-tab="knowledge" aria-selected="false">Knowledge</button>
+      <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+    </nav>
+
+    <div class="panel" id="tab-transcript" role="tabpanel">
+      <div class="lines" id="lines"></div>
+      <p class="empty" id="linesEmpty">Nothing said yet. Start listening and both sides of the call appear here.</p>
+      <div class="panel-foot">
+        <button id="exportBtn" class="btn quiet">Save transcript</button>
+        <button id="resetBtn" class="btn quiet">Clear for a new meeting</button>
+      </div>
+    </div>
+
+    <div class="panel" id="tab-screen" role="tabpanel" hidden>
+      <canvas id="screenPreview" class="preview" hidden></canvas>
+      <pre class="screen-text" id="screenText"></pre>
+      <p class="empty" id="screenEmpty">No screen is being read. When you start listening, pick the screen or the meeting window that shows the shared content.</p>
+    </div>
+
+    <div class="panel" id="tab-knowledge" role="tabpanel" hidden>
+      <form id="kbForm" class="row">
+        <input id="kbInput" type="text" placeholder="owner/repo, a GitHub username, or a URL" aria-label="Repository or URL to add" autocomplete="off">
+        <button class="btn" type="submit">Add</button>
+      </form>
+      <div class="row">
+        <button id="kbFolder" class="btn quiet">Add a folder</button>
+        <button id="kbSyncAll" class="btn quiet">Sync all</button>
+        <span class="kb-status" id="kbStatus"></span>
+      </div>
+      <ul class="kb-list" id="kbList"></ul>
+      <p class="empty" id="kbEmpty">No sources yet. Add a GitHub repository, a username to pull every repo you own, or a URL that returns a document or JSON. Answers quote from what you add here.</p>
+      <form id="kbTry" class="row">
+        <input id="kbTryInput" type="text" placeholder="Try a search to see what an answer would draw on" aria-label="Search your sources" autocomplete="off">
+        <button class="btn quiet" type="submit">Search</button>
+      </form>
+      <ol class="kb-hits" id="kbHits"></ol>
+    </div>
+
+    <div class="panel" id="tab-settings" role="tabpanel" hidden>
+      <form id="settings" autocomplete="off">
+        <fieldset>
+          <legend>Model service</legend>
+          <label>API base URL <input id="s-llm-base" type="text" placeholder="https://api.groq.com/openai/v1"></label>
+          <label>API key <input id="s-llm-key" type="password"></label>
+          <label>Chat model <input id="s-llm-model" type="text"></label>
+          <label>Speech-to-text model <input id="s-stt-model" type="text"></label>
+          <label>Spoken language <input id="s-stt-lang" type="text" placeholder="Detect automatically (or en, zh, ms ...)"></label>
+          <label>Names and terms to get right <textarea id="s-stt-vocab" rows="2" placeholder="Product names, acronyms, people: CPM, Databricks, Wen Jun"></textarea></label>
+        </fieldset>
+        <fieldset>
+          <legend>Answers</legend>
+          <label>About you <textarea id="s-profile" rows="4" placeholder="Your role, what you work on, and how you like to sound. Answers are written in your voice."></textarea></label>
+          <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
+          <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
+        </fieldset>
+        <fieldset>
+          <legend>Shortcuts</legend>
+          <p class="hint">These work while the meeting app is in front. Click a field and press the keys; Backspace turns it off.</p>
+          <p class="hint" id="keyHint"></p>
+          <label>Answer what they said <input id="s-key-answer" class="keys" type="text" readonly placeholder="Off"></label>
+          <label>Answer from the screen <input id="s-key-screen" class="keys" type="text" readonly placeholder="Off"></label>
+          <label>Show or hide this window <input id="s-key-toggle" class="keys" type="text" readonly placeholder="Off"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Audio and screen</legend>
+          <label>Your microphone <select id="s-mic"></select></label>
+          <label>Their audio <select id="s-them"></select></label>
+          <p class="hint" id="themHint"></p>
+          <label>Read the screen every <select id="s-ocr-int"><option value="2">2 seconds</option><option value="4">4 seconds</option><option value="8">8 seconds</option><option value="15">15 seconds</option></select></label>
+          <label>Screen text languages <input id="s-ocr-langs" type="text" placeholder="eng (add more with +, e.g. eng+chi_sim)"></label>
+        </fieldset>
+        <fieldset>
+          <legend>GitHub</legend>
+          <label>Access token (private repos, higher limits) <input id="s-gh-token" type="password"></label>
+          <label>API URL <input id="s-gh-api" type="text" placeholder="https://api.github.com"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Your search API</legend>
+          <label>Search URL, queried for every answer <input id="s-api-url" type="text" placeholder="https://example.com/search?q={query}"></label>
+          <label>Header name <input id="s-api-hname" type="text" placeholder="Authorization"></label>
+          <label>Header value <input id="s-api-hvalue" type="password"></label>
+          <p class="hint">The same header is sent when you add a URL under Knowledge.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Advanced</legend>
+          <label>Speech-to-text base URL, if different <input id="s-stt-base" type="text"></label>
+          <label>Speech-to-text API key <input id="s-stt-key" type="password"></label>
+          <label>Embedding model, for meaning-based search <input id="s-embed-model" type="text" placeholder="Leave empty for keyword search"></label>
+          <label>Embedding base URL <input id="s-embed-base" type="text"></label>
+          <label>Embedding API key <input id="s-embed-key" type="password"></label>
+          <label>Extra chat parameters (JSON) <input id="s-llm-extra" type="text"></label>
+          <label>Window opacity <input id="s-opacity" type="range" min="0.45" max="1" step="0.05"></label>
+        </fieldset>
+        <div class="panel-foot sticky"><button class="btn primary" type="submit">Save settings</button><span class="hint" id="keyNote"></span></div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div class="sheet" id="picker" hidden role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+  <div class="sheet-body">
+    <h2 id="pickerTitle">Which screen should be read?</h2>
+    <p class="hint">Pick the meeting window, or the screen it is on. Slides and anything else shared there are read as text.</p>
+    <div class="picker-grid" id="pickerGrid"></div>
+    <p class="empty" id="pickerEmpty" hidden>No screens or windows could be listed. On macOS, allow Screen Recording for Meeting Copilot in System Settings, then restart the app. You can still listen without reading a screen.</p>
+    <div class="panel-foot"><button id="pickNone" class="btn">Listen without reading a screen</button><button id="pickCancel" class="btn quiet">Cancel</button></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+
+<script src="capture.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

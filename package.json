@@ -1,0 +1,22 @@
+{
+  "name": "meeting-copilot",
+  "version": "0.1.0",
+  "description": "Floating meeting overlay: live two-sided transcript, shared-screen OCR, and answer suggestions grounded in your GitHub repos and API.",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/core.test.js",
+    "e2e": "node test/e2e.js"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
