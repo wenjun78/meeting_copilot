@@ -480,8 +480,9 @@ test('front matter is stripped, and pinned notes are picked up by flag or by fil
   assert.deepEqual(about.pinned, { title: 'About Alex', text: '# About\n\nAlex is based in Penang.' });
   assert.ok(!about.chunks.some(c => /pinned: true|title: About/.test(c.text)), 'front matter is not indexed as content');
   assert.equal(readNote('notes/skills.md', '---\ntitle: Skills\n---\nPython.').pinned, null);
-  for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
-  for (const name of ['jdbc.md', 'cv.md', 'jd.py']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
+  for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf', 'JD - Data Engineer.pdf', 'Lenovo_JD.docx',
+    'job description (final).md', 'interview instructions.md', 'agenda.txt', 'client-brief.md']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
+  for (const name of ['jdbc.md', 'cv.md', 'jd.py', 'briefcase.md', 'reinstructions.md', 'projects.md']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
   assert.equal(readNote('a.md', 'No front matter here.\n---\nnot: meta').pinned, null);
 });
 

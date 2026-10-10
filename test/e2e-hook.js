@@ -67,6 +67,19 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     if (v1 !== v0 || v2 === v1) throw new Error('background refresh did not behave as expected');
     await js(`document.querySelector('[data-tab=knowledge]').click()`);
     await waitFor('kb list', () => js(`document.querySelectorAll('#kbList li').length === 1`));
+
+    // Files handed to the app directly: copied into its own folder, indexed, and pinned by name.
+    const os = require('os');
+    const drop = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-drop-'));
+    fs.writeFileSync(path.join(drop, 'JD - Platform Engineer.md'), '# Platform Engineer\n\nMust have Terraform and on-call experience.');
+    fs.copyFileSync(path.join(__dirname, 'fixtures', 'sample-cv.docx'), path.join(drop, 'my cv.docx'));
+    fs.writeFileSync(path.join(drop, 'photo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0]));
+    const addedFiles = await js(`window.mc.call('kb:addFiles', ${JSON.stringify(fs.readdirSync(drop).map(f => path.join(drop, f)))})`);
+    await waitFor('my files listed', () => js(`[...document.querySelectorAll('#kbList .label')].some(n => n.textContent === 'My files')`));
+    fs.rmSync(drop, { recursive: true, force: true }); // the app keeps its own copies
+    const mine = Object.values(kb.sources).find(x => x.label === 'My files');
+    step('files added to the app', { result: addedFiles.value, pinned: mine && mine.pinned.map(p => p.path), found: kb.search('XLM-RoBERTa ticket routing', 4).some(h => h.path.endsWith('my cv.docx')) });
+    if (!mine || mine.files !== 2 || mine.pinned.length !== 1 || addedFiles.value.skipped[0] !== 'photo.png') throw new Error('adding files did not behave as expected');
     await js(`(async () => { document.getElementById('kbTryInput').value = 'fuzzy match threshold'; document.getElementById('kbTry').requestSubmit(); })()`);
     await waitFor('kb hits', () => js(`document.querySelectorAll('#kbHits li b').length > 0`));
     step('kb search', { top: await js(`document.querySelector('#kbHits li b').textContent`) });

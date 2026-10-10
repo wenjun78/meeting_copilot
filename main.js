@@ -12,6 +12,7 @@ const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
 const { extractText } = require('./src/rag/extract');
+const { isIndexable } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -88,6 +89,30 @@ function publicConfig() {
 
 // ---- knowledge sources ------------------------------------------------------
 
+// Files added through the app are copied here, so they keep working if the originals move.
+const myFilesDir = () => path.join(app.getPath('userData'), 'my-files');
+
+// Copies files into the app's own folder and indexes it. Folders among the paths are added
+// as folder sources instead. -> { added: [...], skipped: [names] }
+async function addFiles(paths) {
+  const dir = myFilesDir();
+  const skipped = [];
+  let copied = 0;
+  const added = [];
+  for (const p of paths || []) {
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    if (st.isDirectory()) { added.push(...await syncOrigin({ kind: 'folder', spec: p })); continue; }
+    const name = path.basename(p);
+    if (!st.isFile() || !isIndexable(name, st.size)) { skipped.push(name); continue; }
+    fs.mkdirSync(dir, { recursive: true });
+    if (path.resolve(p) !== path.join(dir, name)) fs.copyFileSync(p, path.join(dir, name));
+    copied++;
+  }
+  if (copied) added.push(...await syncOrigin({ kind: 'folder', spec: dir }));
+  return { added, skipped };
+}
+
 // Reads one origin (a repo, every repo of a user, a URL or a folder) into the index.
 // quiet: a background refresh. Sources that have not changed are skipped without being
 // downloaded again, and nothing is reported unless something actually changed.
@@ -121,10 +146,15 @@ async function syncOriginNow(origin, { quiet = false } = {}) {
     if (!result.chunks.length) throw new Error('That URL returned nothing readable.');
     keep(result);
   } else if (origin.kind === 'folder') {
-    progress(`Reading ${origin.spec}`);
+    const mine = origin.spec === myFilesDir();
+    progress(mine ? 'Reading your files' : `Reading ${origin.spec}`);
     const result = await ingestFolder(origin.spec);
-    if (!result.chunks.length) throw new Error('No readable text, code, PDF or Word files in that folder.');
-    keep(result);
+    if (mine) result.label = 'My files';
+    if (!result.chunks.length) {
+      // The last of the added files was deleted: drop the source instead of reporting an error.
+      if (mine && quiet) { kb.removeSource(result.id); added.push({ label: result.label, files: 0, chunks: [] }); }
+      else throw new Error(mine ? 'None of those files had text that could be read.' : 'No readable text, code, PDF or Word files in that folder.');
+    } else keep(result);
   }
   if (added.length) await embedIfConfigured();
   kb.save();
@@ -304,7 +334,33 @@ function wireIpc() {
     if (r.canceled || !r.filePaths[0]) return null;
     return syncOrigin({ kind: 'folder', spec: r.filePaths[0] });
   });
-  handle('kb:remove', (id) => { kb.removeSource(id); kb.save(); return kb.stats(); });
+  handle('kb:addFiles', async (paths) => {
+    if (!Array.isArray(paths)) {
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: 'Add your CV, job description, notes',
+        filters: [{ name: 'Documents and notes', extensions: ['md', 'txt', 'pdf', 'docx', 'html', 'ipynb', 'py', 'sql', 'json', 'csv'] }, { name: 'All files', extensions: ['*'] }] });
+      if (r.canceled || !r.filePaths.length) return null;
+      paths = r.filePaths;
+    }
+    const out = await addFiles(paths.filter(p => typeof p === 'string' && p));
+    if (!out.added.length && out.skipped.length) throw new Error(`Could not read ${out.skipped.join(', ')}. Use Markdown, text, PDF or Word files.`);
+    return out;
+  });
+  handle('kb:openFolder', (id) => {
+    const src = kb.sources[id];
+    if (src && src.origin && src.origin.kind === 'folder') shell.openPath(src.origin.spec);
+    return true;
+  });
+  handle('kb:remove', async (id) => {
+    const src = kb.sources[id];
+    if (src && src.origin && src.origin.spec === myFilesDir()) {
+      // These are the app's own copies, so removing the source deletes them. The originals are untouched.
+      const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Remove', 'Cancel'], defaultId: 1, cancelId: 1,
+        message: 'Remove the files you added to the app?', detail: 'The copies kept by the app are deleted. Your original files stay where they are.' });
+      if (r.response !== 0) return kb.stats();
+      fs.rmSync(myFilesDir(), { recursive: true, force: true });
+    }
+    kb.removeSource(id); kb.save(); return kb.stats();
+  });
   handle('kb:sync', async (id) => {
     const all = Object.values(kb.sources);
     const failures = [];
@@ -436,7 +492,7 @@ app.whenReady().then(() => {
   const failed = registerShortcuts();
   if (failed.length) win.webContents.once('did-finish-load', () => send('notice', { level: 'error', message: shortcutFailure(failed) }));
 
-  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, background, globalShortcut, runShortcut });
+  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, background, globalShortcut, runShortcut, addFiles });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (ocr) ocr.stop(); });
