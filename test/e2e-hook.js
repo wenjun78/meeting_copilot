@@ -6,7 +6,7 @@ const { BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-module.exports = async ({ app, win, copilot, kb, syncOrigin, globalShortcut, runShortcut }) => {
+module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, globalShortcut, runShortcut }) => {
   const out = process.env.MC_E2E_OUT;
   const result = { steps: [], ok: false };
   const step = (name, data) => { result.steps.push({ name, ...data }); console.log('[e2e]', name, JSON.stringify(data || {})); };
@@ -45,6 +45,16 @@ module.exports = async ({ app, win, copilot, kb, syncOrigin, globalShortcut, run
 
     const added = await syncOrigin({ kind: 'github', spec: 'wj/etl-pipeline' });
     step('github sync', { added, chunks: kb.chunks.length });
+    // Documents inside the repo (a CV as PDF and as Word) are readable in this build.
+    const hit = (q, file) => { const h = kb.search(q, 3).find(x => x.path.endsWith(file)); return h ? h.text.slice(0, 90) : null; };
+    step('documents', { pdf: hit('nightly load 12 million customer records', 'sample-cv.pdf'), docx: hit('XLM-RoBERTa ticket routing', 'sample-cv.docx') });
+    if (!kb.search('nightly load 12 million customer records', 3).some(x => x.path.endsWith('sample-cv.pdf'))) throw new Error('PDF text was not indexed');
+    // Background refresh: nothing to do while the repo is unchanged, picks up a new push.
+    const idle = await autoSync();
+    await fetch(config.get().github.apiBase + '/__push');
+    const afterPush = await autoSync();
+    step('background refresh', { unchanged: idle, afterPush });
+    if (idle.updated !== 0 || afterPush.updated !== 1) throw new Error('background refresh did not behave as expected');
     await js(`document.querySelector('[data-tab=knowledge]').click()`);
     await waitFor('kb list', () => js(`document.querySelectorAll('#kbList li').length === 1`));
     await js(`(async () => { document.getElementById('kbTryInput').value = 'fuzzy match threshold'; document.getElementById('kbTry').requestSubmit(); })()`);

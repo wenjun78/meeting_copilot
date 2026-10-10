@@ -1,6 +1,7 @@
 'use strict';
 const { readTarGz } = require('./tar');
-const { chunkFile, isIndexable, looksBinary } = require('./chunker');
+const { chunkFile, isIndexable } = require('./chunker');
+const { extractText } = require('./extract');
 
 // Accepts "owner", "owner/repo", "owner/repo@ref", "owner/repo/sub/dir" or a github.com URL.
 function parseRepoSpec(spec) {
@@ -48,21 +49,21 @@ async function listRepos(owner, { token, fetchFn = fetch, apiBase = 'https://api
   }
   const repos = await (await gh(fetchFn, url, token)).json();
   return repos.filter(r => !r.fork && !r.archived && r.size > 0).slice(0, max)
-    .map(r => ({ owner: r.owner.login, repo: r.name, ref: '', subdir: '' }));
+    .map(r => ({ owner: r.owner.login, repo: r.name, ref: '', subdir: '', meta: r })); // meta saves a request per repo
 }
 
-// -> { id, label, url, chunks:[{path,url,title,text}], files, skipped }
-async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.github.com', maxFiles = 1500 } = {}) {
+// -> { id, label, url, version, chunks:[{path,url,title,text}], files, skipped }
+// With knownVersion, a repo that has not been pushed to since is not downloaded: -> { id, unchanged: true }
+async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.github.com', maxFiles = 1500, knownVersion = '' } = {}) {
   const { owner, repo, subdir } = spec;
-  let ref = spec.ref;
-  let htmlUrl = `https://github.com/${owner}/${repo}`;
-  let description = '';
-  if (!ref) {
-    const meta = await (await gh(fetchFn, `${apiBase}/repos/${owner}/${repo}`, token)).json();
-    ref = meta.default_branch || 'main';
-    htmlUrl = meta.html_url || htmlUrl;
-    description = meta.description || '';
-  }
+  const meta = spec.meta || await (await gh(fetchFn, `${apiBase}/repos/${owner}/${repo}`, token)).json();
+  const ref = spec.ref || meta.default_branch || 'main';
+  const htmlUrl = meta.html_url || `https://github.com/${owner}/${repo}`;
+  const description = meta.description || '';
+  const version = `${meta.pushed_at || ''}@${ref}`;
+  const id = specId(spec);
+  if (knownVersion && meta.pushed_at && knownVersion === version) return { id, unchanged: true };
+
   const res = await gh(fetchFn, `${apiBase}/repos/${owner}/${repo}/tarball/${encodeURIComponent(ref)}`, token);
   const gz = Buffer.from(await res.arrayBuffer());
   const chunks = [];
@@ -72,15 +73,16 @@ async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.
     const path = entry.path.split('/').slice(1).join('/'); // strip "owner-repo-sha/"
     if (!path) continue;
     if (subdir && !(path === subdir || path.startsWith(subdir + '/'))) continue;
-    if (!isIndexable(path, entry.size) || looksBinary(entry.data)) { skipped++; continue; }
-    if (files >= maxFiles) { skipped++; continue; }
+    if (!isIndexable(path, entry.size) || files >= maxFiles) { skipped++; continue; }
+    const text = await extractText(path, entry.data);
+    if (!text.trim()) { skipped++; continue; }
     files++;
     const fileUrl = `${htmlUrl}/blob/${ref}/${path.split('/').map(encodeURIComponent).join('/')}`;
-    for (const c of chunkFile(path, entry.data.toString('utf8'))) {
+    for (const c of chunkFile(path, text)) {
       chunks.push({ path: `${repo}/${path}`, url: c.line ? `${fileUrl}#L${c.line}` : fileUrl, title: c.title, text: c.text });
     }
   }
-  return { id: specId(spec), label: `${owner}/${repo}${subdir ? '/' + subdir : ''}`, url: htmlUrl, chunks, files, skipped };
+  return { id, label: `${owner}/${repo}${subdir ? '/' + subdir : ''}`, url: htmlUrl, version, chunks, files, skipped };
 }
 
 module.exports = { parseRepoSpec, specId, listRepos, fetchRepo };

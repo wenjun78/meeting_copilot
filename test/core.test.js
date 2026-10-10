@@ -65,7 +65,7 @@ test('parseRepoSpec accepts the common ways of naming a repo', () => {
 
 test('GitHub ingestion reads a tarball, flattens notebooks, skips binaries and vendored code', async () => {
   const r = await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { apiBase: srv.base + '/gh', token: 'ghp_x' });
-  assert.equal(r.files, 3);
+  assert.equal(r.files, 5);
   assert.equal(srv.log.github.at(-1), 'Bearer ghp_x');
   const paths = new Set(r.chunks.map(c => c.path));
   assert.ok(paths.has('etl-pipeline/README.md') && paths.has('etl-pipeline/src/dedupe.py') && paths.has('etl-pipeline/notebooks/eda.ipynb'));
@@ -123,14 +123,19 @@ test('API ingestion handles JSON collections and HTML pages; live search passes 
   assert.equal(itemsFromJson({ hits: { hits: [{ _source: { title: 'T', body: 'B' } }] } })[0].text, 'B');
 });
 
-test('local folder ingestion', () => {
+test('local folder ingestion reads text and PDF files and reports a version', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-'));
   fs.writeFileSync(path.join(dir, 'notes.md'), '# Notes\n\nThe CPM system owns account hierarchies.');
   fs.mkdirSync(path.join(dir, 'node_modules'));
   fs.writeFileSync(path.join(dir, 'node_modules', 'x.md'), 'ignore me');
-  const r = ingestFolder(dir);
-  assert.equal(r.files, 1);
-  assert.match(r.chunks[0].text, /account hierarchies/);
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf'), path.join(dir, 'cv.pdf'));
+  const r = await ingestFolder(dir);
+  assert.equal(r.files, 2);
+  assert.ok(r.chunks.some(c => c.path.endsWith('/cv.pdf') && /Jaro-Winkler fuzzy matching/.test(c.text)));
+  assert.equal((await ingestFolder(dir)).version, r.version, 'unchanged folder keeps its version');
+  fs.appendFileSync(path.join(dir, 'notes.md'), '\nMore.');
+  assert.notEqual((await ingestFolder(dir)).version, r.version);
+  assert.ok(r.chunks.some(c => /account hierarchies/.test(c.text)));
 });
 
 test('transcription sends a WAV with the glossary prompt and filters non-speech', async () => {
@@ -400,4 +405,55 @@ test('answering from the screen asks for runnable code and tells the model to se
   assert.match(chats[0], /ignore menus, toolbars/);
   await co.answer({ mode: 'screen', question: 'Rewrite it with a window function' });
   assert.match(chats[1], /What I need: Rewrite it with a window function/);
+});
+
+test('PDF and Word files in a repo become searchable passages', async () => {
+  const kb = new KnowledgeBase(null);
+  kb.setSource(await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { apiBase: srv.base + '/gh' }));
+  const pdf = kb.search('how many customer records does the nightly load handle, and how fast', 3).find(h => h.path.endsWith('sample-cv.pdf'));
+  assert.ok(pdf, 'PDF passage found');
+  assert.match(pdf.text, /12 million customer records in 40 minutes/);
+  assert.match(pdf.url, /\/blob\/main\/cv\/sample-cv\.pdf$/);
+  const docx = kb.search('XLM-RoBERTa ticket routing macro F1', 2)[0];
+  assert.ok(docx.path.endsWith('sample-cv.docx'));
+  assert.match(docx.text, /0\.87 macro F1/);
+  assert.match(kb.search('AWS certification', 2)[0].text, /AWS Machine Learning Specialty/);
+});
+
+test('a PDF behind a URL is read as a document', async () => {
+  const r = await ingestUrl(srv.base + '/kb/cv.pdf');
+  assert.ok(r.chunks.length >= 1);
+  assert.equal(r.chunks[0].title.split(' ')[0], 'cv.pdf');
+  assert.match(r.chunks.map(c => c.text).join(' '), /MSc Applied Statistics/);
+  assert.equal((await ingestUrl(srv.base + '/kb/cv.pdf')).version, r.version);
+});
+
+test('a repo that has not been pushed to is not downloaded again; a new push is picked up', async () => {
+  const s2 = await mock.start({ pushedAt: '2026-10-01T00:00:00Z' });
+  const opts = { apiBase: s2.base + '/gh' };
+  const first = await fetchRepo(parseRepoSpec('wj/etl-pipeline'), opts);
+  assert.equal(s2.log.tarballs, 1);
+  const again = await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { ...opts, knownVersion: first.version });
+  assert.deepEqual(again, { id: 'github:wj/etl-pipeline', unchanged: true });
+  assert.equal(s2.log.tarballs, 1, 'no second download');
+  s2.state.pushedAt = '2026-10-10T09:00:00Z';
+  const updated = await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { ...opts, knownVersion: first.version });
+  assert.ok(updated.chunks.length > 0);
+  assert.notEqual(updated.version, first.version);
+  assert.equal(s2.log.tarballs, 2);
+  // Listing a user's repos carries the same information, so unchanged repos cost no extra request.
+  const [listed] = await listRepos('wj', opts);
+  assert.deepEqual(await fetchRepo(listed, { ...opts, knownVersion: updated.version }), { id: 'github:wj/etl-pipeline', unchanged: true });
+  await s2.close();
+});
+
+test('re-syncing a source keeps the embeddings of passages that did not change', () => {
+  const kb = new KnowledgeBase(null);
+  const a = { path: 'r/a.md', url: '', title: 'a.md', text: 'alpha' }, b = { path: 'r/b.md', url: '', title: 'b.md', text: 'beta' };
+  kb.setSource({ id: 's', label: 's', files: 2, version: 'v1', chunks: [a, b] });
+  kb.chunks.forEach((c, i) => { c.vec = Float32Array.from([i, 1]); });
+  kb.setSource({ id: 's', label: 's', files: 2, version: 'v2', chunks: [a, { ...b, text: 'beta changed' }] });
+  assert.deepEqual([...kb.chunks[0].vec], [0, 1]);
+  assert.equal(kb.chunks[1].vec, undefined);
+  assert.equal(kb.sources.s.version, 'v2');
 });

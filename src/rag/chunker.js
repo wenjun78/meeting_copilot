@@ -2,7 +2,7 @@
 // Turns a file into retrieval-sized chunks. Markdown/prose splits on headings
 // and paragraphs; code splits on line windows; notebooks are flattened first.
 
-const PROSE_EXT = new Set(['md', 'mdx', 'markdown', 'txt', 'rst', 'adoc', 'org', 'html', 'htm', '']);
+const PROSE_EXT = new Set(['md', 'mdx', 'markdown', 'txt', 'rst', 'adoc', 'org', 'html', 'htm', 'pdf', 'docx', '']);
 const CODE_EXT = new Set(['py', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'java', 'kt', 'go', 'rs', 'rb', 'php', 'cs', 'c', 'h',
   'cpp', 'hpp', 'swift', 'scala', 'r', 'sql', 'sh', 'bash', 'ps1', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'json', 'tf',
   'dockerfile', 'gradle', 'xml', 'css', 'scss', 'vue', 'svelte', 'ipynb', 'csv', 'tsv']);
@@ -25,14 +25,9 @@ function isIndexable(path, size = 0, maxBytes = 400_000) {
   if (ext === '' && !PLAIN_NAMES.test(path.split('/').pop())) return false;
   if (!(PROSE_EXT.has(ext) || CODE_EXT.has(ext) || ext === 'makefile')) return false;
   if (ext === 'ipynb') return size <= 8_000_000; // outputs are stripped, so allow big notebooks
+  if (ext === 'pdf' || ext === 'docx') return size <= 25_000_000; // text is extracted, so the file size says little
   if ((ext === 'json' || ext === 'csv' || ext === 'tsv' || ext === 'xml') && size > 60_000) return false;
   return size <= maxBytes;
-}
-
-function looksBinary(buf) {
-  const n = Math.min(buf.length, 4000);
-  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
-  return false;
 }
 
 function notebookToText(raw) {
@@ -147,4 +142,4 @@ function chunkFile(path, raw) {
   return pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
 }
 
-module.exports = { chunkFile, chunkProse, chunkCode, isIndexable, looksBinary, htmlToText, notebookToText, extOf };
+module.exports = { chunkFile, chunkProse, chunkCode, isIndexable, htmlToText, notebookToText, extOf };

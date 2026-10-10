@@ -212,6 +212,7 @@ setInterval(() => {
 
 function setListening(on) {
   state.listening = on;
+  window.mc.call('meeting:listening', on);
   document.body.classList.toggle('listening', on);
   $('toggle').textContent = on ? 'Stop' : 'Start listening';
   $('toggle').classList.toggle('primary', !on);
@@ -293,7 +294,7 @@ function renderKb(stats) {
     el('span', { class: 'label', title: s.label, text: s.label }),
     el('button', { class: 'btn quiet', type: 'button', text: 'Sync', onclick: () => kbRun(() => call('kb:sync', s.id), `${s.label} synced`) }),
     el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => renderKb(await call('kb:remove', s.id)) }),
-    el('span', { class: 'meta', text: `${s.files} ${s.files === 1 ? 'file' : 'files'}, ${s.chunkCount} passages, synced ${ago(s.syncedAt)}` }))));
+    el('span', { class: 'meta', text: `${s.files} ${s.files === 1 ? 'file' : 'files'}, ${s.chunkCount} passages, updated ${ago(s.syncedAt)}${s.checkedAt && s.checkedAt - s.syncedAt > 60000 ? `, checked ${ago(s.checkedAt)}` : ''}` }))));
   $('kbStatus').textContent = stats.chunks ? `${stats.chunks} passages${stats.embedded ? `, ${stats.embedded} with embeddings` : ''}` : '';
   if (state.answer.status === 'idle') renderIdle();
 }
@@ -319,6 +320,9 @@ $('kbForm').addEventListener('submit', (e) => {
 });
 $('kbFolder').addEventListener('click', () => kbRun(() => call('kb:addFolder'), addedMessage));
 $('kbSyncAll').addEventListener('click', () => kbRun(() => call('kb:sync', null), 'All sources synced'));
+$('kbAuto').addEventListener('change', async () => {
+  try { const r = await call('config:set', { autoSync: $('kbAuto').checked }); state.cfg = r.config; } catch (e) { fail(e); }
+});
 $('kbTry').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
@@ -360,6 +364,7 @@ function fillSettings() {
   $('s-api-url').value = c.api.searchUrl; $('s-api-hname').value = c.api.headerName; $('s-api-hvalue').placeholder = keyHint(s.apiHeader);
   $('s-embed-model').value = c.embed.model; $('s-embed-base').value = c.embed.baseUrl; $('s-embed-key').placeholder = keyHint(s.embedKey);
   $('s-opacity').value = String(c.ui.opacity || 1);
+  $('kbAuto').checked = c.autoSync !== false;
   for (const [action, id] of SHORTCUT_FIELDS) setShortcutField($(id), c.shortcuts[action] || '', state.labels[action] || '');
   applyShortcutLabels();
   for (const id of ['s-llm-key', 's-stt-key', 's-gh-token', 's-api-hvalue', 's-embed-key']) $(id).value = '';
