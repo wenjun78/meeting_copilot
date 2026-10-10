@@ -11,7 +11,11 @@ module.exports = async ({ app, win, copilot, kb, syncOrigin, globalShortcut, run
   const result = { steps: [], ok: false };
   const step = (name, data) => { result.steps.push({ name, ...data }); console.log('[e2e]', name, JSON.stringify(data || {})); };
   const js = (code) => win.webContents.executeJavaScript(code, true);
-  const shot = async (name) => fs.writeFileSync(path.join(out, name + '.png'), (await win.webContents.capturePage()).toPNG());
+  // Screenshots are a convenience; some machines (CI runners without a GPU) cannot take them.
+  const shot = async (name) => {
+    try { fs.writeFileSync(path.join(out, name + '.png'), (await win.webContents.capturePage()).toPNG()); }
+    catch (e) { step('screenshot skipped', { name, reason: String(e.message || e) }); }
+  };
   const waitFor = async (what, fn, ms = 30000) => {
     const t0 = Date.now();
     for (;;) {
