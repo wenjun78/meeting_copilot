@@ -148,6 +148,7 @@ function uniqueOrigins(sources) {
 
 // Background refresh: shortly after launch and then every half hour, but never during a
 // meeting, when the network and CPU are needed for the call.
+const background = { started: false };
 let meetingOn = false;
 let autoSyncFailure = '';
 // force: the one refresh made as a meeting starts, so the CV and job description are current.
@@ -265,11 +266,7 @@ function wireIpc() {
     config.update(patch);
     if (patch.ui && patch.ui.opacity && win) win.setOpacity(Math.max(0.35, Math.min(1, patch.ui.opacity)));
     if (patch.shortcuts) {
-      setupUpdates();
-  setTimeout(() => autoSync(), 8000);
-  setInterval(() => autoSync(), 30 * 60 * 1000);
-
-  const failed = registerShortcuts();
+      const failed = registerShortcuts();
       if (failed.length) send('notice', { level: 'error', message: shortcutFailure(failed) });
     }
     if (config.get().embed.model && config.get().embed.model !== before && kb.chunks.length) {
@@ -430,10 +427,16 @@ app.whenReady().then(() => {
   wireIpc();
   createWindow();
 
+  // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
+  setupUpdates();
+  setTimeout(() => autoSync(), 8000);
+  setInterval(() => autoSync(), 30 * 60 * 1000);
+  background.started = true;
+
   const failed = registerShortcuts();
   if (failed.length) win.webContents.once('did-finish-load', () => send('notice', { level: 'error', message: shortcutFailure(failed) }));
 
-  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, globalShortcut, runShortcut });
+  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, background, globalShortcut, runShortcut });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (ocr) ocr.stop(); });
