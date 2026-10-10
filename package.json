@@ -1,6 +1,6 @@
 {
   "name": "meeting-copilot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Floating meeting overlay: live two-sided transcript, shared-screen OCR, and answer suggestions grounded in your GitHub repos and API.",
   "main": "main.js",
   "license": "MIT",

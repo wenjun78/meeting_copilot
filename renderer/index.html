@@ -74,13 +74,14 @@
         <button class="btn" type="submit">Add</button>
       </form>
       <div class="row">
+        <button id="kbFiles" class="btn">Add files</button>
         <button id="kbFolder" class="btn quiet">Add a folder</button>
         <button id="kbSyncAll" class="btn quiet">Sync all</button>
         <span class="kb-status" id="kbStatus"></span>
       </div>
       <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
       <ul class="kb-list" id="kbList"></ul>
-      <p class="empty" id="kbEmpty">No sources yet. Add a GitHub repository, a username to pull every repo you own, or a URL that returns a document or JSON. Markdown, code, notebooks, PDF and Word files are read. Answers quote from what you add here.</p>
+      <p class="empty" id="kbEmpty">No sources yet. Add files such as your CV and the job description (or drop them here), a GitHub repository, a username to pull every repo you own, or a URL. Markdown, PDF, Word, code and notebooks are read. Answers quote from what you add here.</p>
       <form id="kbTry" class="row">
         <input id="kbTryInput" type="text" placeholder="Try a search to see what an answer would draw on" aria-label="Search your sources" autocomplete="off">
         <button class="btn quiet" type="submit">Search</button>

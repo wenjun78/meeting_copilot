@@ -142,8 +142,9 @@ function frontMatter(text) {
 }
 
 // A note is pinned (sent to the model with every answer, not only when a search finds it)
-// when its front matter says "pinned: true" or the file is named like a job description.
-const PINNED_NAME = /^_?(jd|job[-_ ]?descriptions?)$/i;
+// when its front matter says "pinned: true" or its file name contains one of these as a
+// whole word: jd, job description, instructions, agenda, brief ("JD - Data Engineer.pdf").
+const PINNED_NAME = /(^|[\s_.()\[\]-])(jd|job[\s_-]?descriptions?|instructions?|agenda|brief(ing)?)($|[\s_.()\[\]-])/i;
 
 // -> { chunks: [{title, text, line?}], pinned: null | {title, text} }
 function readNote(path, raw) {

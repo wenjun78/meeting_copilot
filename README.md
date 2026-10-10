@@ -111,6 +111,11 @@ duplicates are filtered, but headphones give a cleaner transcript.
 
 ## Knowledge sources
 
+- **Files**: press "Add files" in the Knowledge tab, or drop files or folders
+  onto the window. Files are copied into the app's own folder, so they keep
+  working if the originals move; "Open" on the "My files" row shows that
+  folder for editing or deleting.
+
 - **GitHub**: one request downloads the repository; Markdown, notebooks
   (outputs stripped), code, config, **PDF and Word (.docx)** files are split
   into passages. Add a token in Settings for private repos. GitHub
@@ -138,10 +143,10 @@ agenda asks for:
 
 - **Pasted**: Settings > This meeting (or "Load from a file" for a PDF or
   Word file).
-- **Pinned notes in your sources**, which stay current with the repo: a file
-  named `jd.md` / `job-description.md` (also `.txt`, `.pdf`, `.docx`, or with
-  a leading underscore such as `_jd.md`), or any Markdown note whose first
-  lines are
+- **Pinned notes in your sources**, which stay current with the source: a
+  file whose name contains `jd`, `job description`, `instructions`, `agenda`
+  or `brief` as a word (`jd.md`, `JD - Data Engineer.pdf`,
+  `interview instructions.docx`), or any Markdown note whose first lines are
 
   ```
   ---
