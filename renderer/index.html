@@ -75,10 +75,17 @@
       </form>
       <div class="row">
         <button id="kbFiles" class="btn">Add files</button>
+        <button id="kbPaste" class="btn quiet" aria-expanded="false" aria-controls="kbPasteForm">Paste text</button>
         <button id="kbFolder" class="btn quiet">Add a folder</button>
         <button id="kbSyncAll" class="btn quiet">Sync all</button>
         <span class="kb-status" id="kbStatus"></span>
       </div>
+      <form id="kbPasteForm" class="paste" hidden>
+        <input id="kbPasteName" type="text" placeholder="Name it: CV, JD, Instructions, Project notes" aria-label="Name for this note" autocomplete="off">
+        <textarea id="kbPasteText" rows="6" placeholder="Paste the text here, from Word, a web page or anywhere else" aria-label="Text to add"></textarea>
+        <p class="hint">A name with JD, job description, instructions, agenda or brief in it is sent with every answer. Anything else is searched when a question relates to it.</p>
+        <div class="row"><button class="btn primary" type="submit">Save note</button><button id="kbPasteCancel" class="btn quiet" type="button">Cancel</button></div>
+      </form>
       <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
       <ul class="kb-list" id="kbList"></ul>
       <p class="empty" id="kbEmpty">No sources yet. Add files such as your CV and the job description (or drop them here), a GitHub repository, a username to pull every repo you own, or a URL. Markdown, PDF, Word, code and notebooks are read. Answers quote from what you add here.</p>

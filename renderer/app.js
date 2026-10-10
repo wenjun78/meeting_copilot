@@ -330,6 +330,22 @@ const filesMessage = (r) => {
   return parts.join('. ');
 };
 $('kbFiles').addEventListener('click', () => kbRun(() => call('kb:addFiles', null), filesMessage));
+function showPaste(on) {
+  $('kbPasteForm').hidden = !on;
+  $('kbPaste').setAttribute('aria-expanded', String(on));
+  if (on) $('kbPasteName').focus();
+}
+$('kbPaste').addEventListener('click', () => showPaste($('kbPasteForm').hidden));
+$('kbPasteCancel').addEventListener('click', () => showPaste(false));
+$('kbPasteForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = $('kbPasteName').value.trim(), text = $('kbPasteText').value;
+  if (!text.trim()) { $('kbPasteText').focus(); return toast('Paste some text first.', 'error'); }
+  kbRun(() => call('kb:addText', { name, text }), (r) => {
+    $('kbPasteName').value = ''; $('kbPasteText').value = ''; showPaste(false);
+    return `${r.replaced ? 'Updated' : 'Saved'} "${r.file}" in My files`;
+  });
+});
 // Files and folders can also be dropped anywhere on the window.
 window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
 window.addEventListener('drop', (e) => {
