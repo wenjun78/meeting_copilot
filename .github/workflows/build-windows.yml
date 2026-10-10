@@ -1,0 +1,53 @@
+name: Build Windows app
+
+# Builds the installer on a real Windows machine. Push a tag like v0.1.0 to
+# publish it as a release; run it by hand to get the files as a build artifact.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist
+
+      # Drives the packaged app with a fake microphone and a mock API. Hosted runners
+      # have no sound card and an unusual desktop, so a failure here does not block the build.
+      - name: Smoke test the packaged app
+        continue-on-error: true
+        shell: bash
+        run: |
+          export MC_E2E_BIN="$PWD/dist/win-unpacked/Meeting Copilot.exe"
+          export MC_E2E_OUT="$PWD/e2e-out"
+          node test/e2e.js
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: meeting-copilot-windows
+          path: |
+            dist/*.exe
+            e2e-out/
+          if-no-files-found: warn
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.exe \
+            --title "Meeting Copilot $GITHUB_REF_NAME" \
+            --notes "Windows build. Download **Meeting-Copilot-Setup** to install it with Start menu and desktop shortcuts, or the **portable** file to run it without installing. The app is not code-signed, so Windows SmartScreen asks for confirmation the first time: choose More info, then Run anyway."
