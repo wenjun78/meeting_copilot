@@ -1,6 +1,6 @@
 'use strict';
 const { readTarGz } = require('./tar');
-const { chunkFile, isIndexable } = require('./chunker');
+const { readNote, isIndexable } = require('./chunker');
 const { extractText } = require('./extract');
 
 // Accepts "owner", "owner/repo", "owner/repo@ref", "owner/repo/sub/dir" or a github.com URL.
@@ -66,7 +66,7 @@ async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.
 
   const res = await gh(fetchFn, `${apiBase}/repos/${owner}/${repo}/tarball/${encodeURIComponent(ref)}`, token);
   const gz = Buffer.from(await res.arrayBuffer());
-  const chunks = [];
+  const chunks = [], pinned = [];
   let files = 0, skipped = 0;
   if (description) chunks.push({ path: '', url: htmlUrl, title: `${owner}/${repo} — description`, text: `${owner}/${repo}: ${description}` });
   for (const entry of readTarGz(gz)) {
@@ -78,11 +78,13 @@ async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.
     if (!text.trim()) { skipped++; continue; }
     files++;
     const fileUrl = `${htmlUrl}/blob/${ref}/${path.split('/').map(encodeURIComponent).join('/')}`;
-    for (const c of chunkFile(path, text)) {
+    const note = readNote(path, text);
+    for (const c of note.chunks) {
       chunks.push({ path: `${repo}/${path}`, url: c.line ? `${fileUrl}#L${c.line}` : fileUrl, title: c.title, text: c.text });
     }
+    if (note.pinned) pinned.push({ path: `${repo}/${path}`, url: fileUrl, ...note.pinned });
   }
-  return { id, label: `${owner}/${repo}${subdir ? '/' + subdir : ''}`, url: htmlUrl, version, chunks, files, skipped };
+  return { id, label: `${owner}/${repo}${subdir ? '/' + subdir : ''}`, url: htmlUrl, version, chunks, pinned, files, skipped };
 }
 
 module.exports = { parseRepoSpec, specId, listRepos, fetchRepo };

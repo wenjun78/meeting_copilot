@@ -254,7 +254,7 @@ class Copilot extends EventEmitter {
       'Grounding:',
       '- The reference material comes from the user\'s own repositories, documents and API. Prefer it over general knowledge and cite it inline as [1], [2].',
       '- Never invent specifics about the user\'s own work, employer, numbers or history. If the references and profile do not cover something, answer from general knowledge and add a final line starting "Check:" naming what the user should verify before saying it.',
-      '- When a job description, agenda or brief for this meeting is given, shape the answer to it: lead with the experience, facts or skills it asks for, in its vocabulary. It describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the profile or references show it. If the user lacks something it asks for, say what is closest and true.',
+      '- When a job description, agenda or brief for this meeting is given (pasted, or as a pinned note), shape the answer to it: lead with the experience, facts or skills it asks for, in its vocabulary. It describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the profile or references show it. If the user lacks something it asks for, say what is closest and true.',
       '- The transcript comes from speech recognition and the screen text from OCR; both can contain errors. Read through obvious mis-hearings.',
       '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
     ].join('\n');
@@ -264,6 +264,16 @@ class Copilot extends EventEmitter {
     const parts = [];
     if (cfg.profile && cfg.profile.trim()) parts.push(`About me:\n${cfg.profile.trim().slice(0, 2500)}`);
     if (cfg.context && cfg.context.trim()) parts.push(`About this meeting (job description, agenda or brief I was given):\n${cfg.context.trim().slice(0, 7000)}`);
+    // Pinned notes from the sources (a job description file, a short bio) ride along with every answer.
+    let room = 9000;
+    const notes = [];
+    for (const n of (this.kb.pinned ? this.kb.pinned() : [])) {
+      if (room < 200) break;
+      const text = n.text.slice(0, room);
+      notes.push(`### ${n.title} (${n.path})\n${text}`);
+      room -= text.length;
+    }
+    if (notes.length) parts.push(`Pinned notes from my sources (always included; may be a job description for this meeting, or notes about me):\n${notes.join('\n\n')}`);
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? 5000 : 1800)}`);
     if (refs.length) {

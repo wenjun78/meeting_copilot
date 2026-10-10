@@ -6,7 +6,7 @@ const { BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, globalShortcut, runShortcut }) => {
+module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, globalShortcut, runShortcut }) => {
   const out = process.env.MC_E2E_OUT;
   const result = { steps: [], ok: false };
   const step = (name, data) => { result.steps.push({ name, ...data }); console.log('[e2e]', name, JSON.stringify(data || {})); };
@@ -43,10 +43,14 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, g
     const slide = new BrowserWindow({ x: 30, y: 30, width: 1040, height: 620, frame: false, backgroundColor: '#ffffff' });
     await slide.loadURL('data:text/html,' + encodeURIComponent('<body style="font:28px Arial;margin:60px;color:#111"><h1 style="font-size:54px">SQL exercise</h1><p>Write a query to find customers with more than one order in the last 30 days.</p><p>Tables: customers(id, name)</p><p>orders(id, customer_id, created_at)</p></body>'));
 
+    // Installed Windows builds ask GitHub for a newer release; other builds report "off".
+    step('update check', await Promise.race([checkForUpdate({ manual: true }), new Promise(r => setTimeout(() => r({ state: 'timeout' }), 30000))]));
+
     const added = await syncOrigin({ kind: 'github', spec: 'wj/etl-pipeline' });
     step('github sync', { added, chunks: kb.chunks.length });
     // Documents inside the repo (a CV as PDF and as Word) are readable in this build.
     const hit = (q, file) => { const h = kb.search(q, 3).find(x => x.path.endsWith(file)); return h ? h.text.slice(0, 90) : null; };
+    step('pinned notes', { names: kb.pinned().map(p => p.path) });
     step('documents', { pdf: hit('nightly load 12 million customer records', 'sample-cv.pdf'), docx: hit('XLM-RoBERTa ticket routing', 'sample-cv.docx') });
     if (!kb.search('nightly load 12 million customer records', 3).some(x => x.path.endsWith('sample-cv.pdf'))) throw new Error('PDF text was not indexed');
     // Background refresh: nothing to do while the repo is unchanged, picks up a new push.

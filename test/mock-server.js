@@ -13,6 +13,8 @@ const REPO_FILES = [
   { path: 'wj-etl-pipeline-abc123/notebooks/eda.ipynb', data: JSON.stringify({ cells: [{ cell_type: 'markdown', source: ['# Exploratory analysis\n', 'Null rate per column before cleaning.'] }, { cell_type: 'code', source: 'df.isna().mean()', outputs: [{ text: 'x'.repeat(5000) }] }] }) },
   { path: 'wj-etl-pipeline-abc123/node_modules/junk/index.js', data: 'module.exports = 1' },
   { path: 'wj-etl-pipeline-abc123/logo.png', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]) },
+  { path: 'wj-etl-pipeline-abc123/knowledge/about.md', data: '---\ntitle: About Alex\npinned: true\n---\n# About\n\nAlex Tan is an engineer based in Penang who enjoys badminton.\n' },
+  { path: 'wj-etl-pipeline-abc123/knowledge/_jd.md', data: '# Senior ML Engineer, Example Corp\n\n## Must have\n\n- Kubernetes and model serving\n- Feature stores\n' },
   { path: 'wj-etl-pipeline-abc123/cv/sample-cv.pdf', data: fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf')) },
   { path: 'wj-etl-pipeline-abc123/cv/sample-cv.docx', data: fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-cv.docx')) },
 ];

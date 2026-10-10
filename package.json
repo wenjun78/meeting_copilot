@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tesseract.js-data/eng": "^1.0.0",
+    "electron-updater": "^6.8.9",
     "mammoth": "^1.13.0",
     "tesseract.js": "^7.0.0",
     "unpdf": "^1.8.1"
@@ -68,6 +69,13 @@
     "linux": {
       "target": "dir",
       "icon": "build/icon.png"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "wenjun78",
+        "repo": "meeting_copilot"
+      }
+    ]
   }
 }

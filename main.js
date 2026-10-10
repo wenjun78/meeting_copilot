@@ -83,7 +83,7 @@ function publicConfig() {
   const saved = { llmKey: !!c.llm.apiKey, sttKey: !!c.stt.apiKey, embedKey: !!c.embed.apiKey, githubToken: !!c.github.token, apiHeader: !!c.api.headerValue };
   c.llm.apiKey = c.stt.apiKey = c.embed.apiKey = c.github.token = c.api.headerValue = '';
   const labels = Object.fromEntries(Object.entries(c.shortcuts).map(([k, v]) => [k, shortcuts.pretty(v)]));
-  return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable() };
+  return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable(), version: app.getVersion(), updates: updater.supported };
 }
 
 // ---- knowledge sources ------------------------------------------------------
@@ -150,12 +150,13 @@ function uniqueOrigins(sources) {
 // meeting, when the network and CPU are needed for the call.
 let meetingOn = false;
 let autoSyncFailure = '';
-async function autoSync() {
-  if (!config.get().autoSync || meetingOn) return { skipped: true };
+// force: the one refresh made as a meeting starts, so the CV and job description are current.
+async function autoSync({ force = false } = {}) {
+  if (!config.get().autoSync || (meetingOn && !force)) return { skipped: true };
   let updated = 0;
   const failures = [];
   for (const origin of uniqueOrigins(Object.values(kb.sources))) {
-    if (meetingOn) break;
+    if (meetingOn && !force) break;
     try { updated += (await syncOrigin(origin, { quiet: true })).length; } catch (e) { failures.push(`${origin.spec}: ${e.message}`); }
   }
   // Report a failure once, not every half hour.
@@ -174,6 +175,52 @@ async function embedIfConfigured() {
   } catch (e) {
     send('notice', { level: 'error', message: `${e.message} Keyword search still works.` });
   }
+}
+
+// ---- app updates ---------------------------------------------------------------
+
+// The installed Windows app updates itself from the GitHub releases of this repository:
+// it checks shortly after launch and every few hours, downloads in the background (never
+// during a meeting) and installs when the app is closed. The portable exe and source runs
+// do not update themselves.
+const updater = { supported: false, state: 'off', version: '', error: '', pending: false, asked: false, lib: null };
+
+function setupUpdates() {
+  updater.supported = app.isPackaged && process.platform === 'win32' && !process.env.PORTABLE_EXECUTABLE_FILE;
+  if (!updater.supported) return;
+  const { autoUpdater } = require('electron-updater');
+  updater.lib = autoUpdater;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null;
+  autoUpdater.on('update-available', (info) => { updater.state = 'available'; updater.version = info.version; updater.pending = true; downloadUpdate(); });
+  autoUpdater.on('update-not-available', () => { updater.state = 'current'; });
+  autoUpdater.on('update-downloaded', (info) => {
+    updater.state = 'ready'; updater.version = info.version; updater.pending = false;
+    send('notice', { level: 'info', message: `Version ${info.version} is downloaded. It installs when you close the app.` });
+  });
+  autoUpdater.on('error', (e) => { updater.state = 'error'; updater.error = String(e && e.message || e).split('\n')[0]; });
+  setTimeout(() => checkForUpdate(), 20000);
+  setInterval(() => checkForUpdate(), 4 * 60 * 60 * 1000);
+}
+
+function downloadUpdate() {
+  if (!updater.pending || meetingOn || process.env.MC_E2E || !(config.get().autoUpdate || updater.asked)) return;
+  updater.pending = false;
+  updater.state = 'downloading';
+  updater.lib.downloadUpdate().catch(() => { updater.pending = true; });
+}
+
+// -> { supported, state, version?, error? }
+async function checkForUpdate({ manual = false } = {}) {
+  if (!updater.supported) return { supported: false, state: 'off' };
+  if (!manual && (!config.get().autoUpdate || meetingOn)) return { supported: true, state: updater.state };
+  if (manual) updater.asked = true; // asking by hand also downloads, even with automatic installs off
+  try {
+    const r = await updater.lib.checkForUpdates();
+    if (r && r.updateInfo) updater.version = r.updateInfo.version;
+  } catch (e) { updater.state = 'error'; updater.error = String(e && e.message || e).split('\n')[0]; }
+  return { supported: true, state: updater.state, version: updater.version, error: updater.state === 'error' ? updater.error : undefined };
 }
 
 // ---- shortcuts ---------------------------------------------------------------
@@ -218,8 +265,9 @@ function wireIpc() {
     config.update(patch);
     if (patch.ui && patch.ui.opacity && win) win.setOpacity(Math.max(0.35, Math.min(1, patch.ui.opacity)));
     if (patch.shortcuts) {
-      setTimeout(autoSync, 8000);
-  setInterval(autoSync, 30 * 60 * 1000);
+      setupUpdates();
+  setTimeout(() => autoSync(), 8000);
+  setInterval(() => autoSync(), 30 * 60 * 1000);
 
   const failed = registerShortcuts();
       if (failed.length) send('notice', { level: 'error', message: shortcutFailure(failed) });
@@ -246,6 +294,7 @@ function wireIpc() {
     return { name: path.basename(file), text: text.slice(0, 7000), truncated: text.length > 7000 };
   });
 
+  handle('update:check', () => checkForUpdate({ manual: true }));
   handle('kb:stats', () => kb.stats());
   handle('kb:add', (text) => {
     const spec = String(text || '').trim();
@@ -312,7 +361,13 @@ function wireIpc() {
   handle('ocr:clear', () => { copilot.setScreenText(''); return true; });
 
   handle('answer:ask', (req) => { copilot.answer(req || {}); return true; });
-  handle('meeting:listening', (on) => { meetingOn = !!on; return true; });
+  handle('meeting:listening', (on) => {
+    const starting = !!on && !meetingOn;
+    meetingOn = !!on;
+    if (starting) autoSync({ force: true }).catch(() => {}); // not awaited: listening starts immediately
+    if (!on) downloadUpdate(); // an update found during the meeting is fetched once it ends
+    return true;
+  });
   handle('meeting:reset', () => { copilot.reset(); return true; });
   handle('meeting:export', async () => {
     const text = copilot.transcriptText();
@@ -378,7 +433,7 @@ app.whenReady().then(() => {
   const failed = registerShortcuts();
   if (failed.length) win.webContents.once('did-finish-load', () => send('notice', { level: 'error', message: shortcutFailure(failed) }));
 
-  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, globalShortcut, runShortcut });
+  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, globalShortcut, runShortcut });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (ocr) ocr.stop(); });

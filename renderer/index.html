@@ -104,6 +104,7 @@
           <label>About you <textarea id="s-profile" rows="4" placeholder="Your role, what you work on, and how you like to sound. Answers are written in your voice."></textarea></label>
           <label>This meeting <textarea id="s-context" rows="4" placeholder="Paste the job description, agenda or client brief. Every answer is shaped to it."></textarea></label>
           <div class="row"><button id="contextLoad" class="btn quiet" type="button">Load from a file</button><button id="contextClear" class="btn quiet" type="button">Clear</button></div>
+          <p class="hint" id="contextPins"></p>
           <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
           <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
         </fieldset>
@@ -144,6 +145,11 @@
           <label>Embedding API key <input id="s-embed-key" type="password"></label>
           <label>Extra chat parameters (JSON) <input id="s-llm-extra" type="text"></label>
           <label>Window opacity <input id="s-opacity" type="range" min="0.45" max="1" step="0.05"></label>
+        </fieldset>
+        <fieldset>
+          <legend>This app</legend>
+          <label class="check"><input id="s-update" type="checkbox"> Install new versions automatically</label>
+          <div class="row"><button id="updateCheck" class="btn quiet" type="button">Check for a new version</button><span class="hint" id="versionNote"></span></div>
         </fieldset>
         <div class="panel-foot sticky"><button class="btn primary" type="submit">Save settings</button><span class="hint" id="keyNote"></span></div>
       </form>

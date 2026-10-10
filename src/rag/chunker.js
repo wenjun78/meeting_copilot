@@ -129,17 +129,40 @@ function chunkCode(text, { maxLines = 70, overlapLines = 10, maxChars = 2400 } =
   return out;
 }
 
-// -> [{title, text, line?}]
-function chunkFile(path, raw) {
-  const ext = extOf(path);
-  let text = raw;
-  let prose = PROSE_EXT.has(ext);
-  if (ext === 'ipynb') { text = notebookToText(raw); prose = true; }
-  if (ext === 'html' || ext === 'htm') text = htmlToText(raw);
-  if (!text || !text.trim()) return [];
-  const name = path.split('/').pop();
-  const pieces = prose ? chunkProse(text) : chunkCode(text);
-  return pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
+// A leading "---" block of "key: value" lines, as used for notes in Markdown files.
+function frontMatter(text) {
+  const m = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  if (!m) return { meta: {}, body: text };
+  const meta = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([\w-]+)\s*:\s*(.*)$/.exec(line.trim());
+    if (kv) meta[kv[1].toLowerCase()] = kv[2].replace(/^["']|["']$/g, '').trim();
+  }
+  return { meta, body: text.slice(m[0].length) };
 }
 
-module.exports = { chunkFile, chunkProse, chunkCode, isIndexable, htmlToText, notebookToText, extOf };
+// A note is pinned (sent to the model with every answer, not only when a search finds it)
+// when its front matter says "pinned: true" or the file is named like a job description.
+const PINNED_NAME = /^_?(jd|job[-_ ]?descriptions?)$/i;
+
+// -> { chunks: [{title, text, line?}], pinned: null | {title, text} }
+function readNote(path, raw) {
+  const ext = extOf(path);
+  const name = path.split('/').pop();
+  let text = raw;
+  let prose = PROSE_EXT.has(ext);
+  let meta = {};
+  if (ext === 'ipynb') { text = notebookToText(raw); prose = true; }
+  else if (ext === 'html' || ext === 'htm') text = htmlToText(raw);
+  else if (prose) ({ meta, body: text } = frontMatter(String(raw || '')));
+  if (!text || !text.trim()) return { chunks: [], pinned: null };
+  const pieces = prose ? chunkProse(text) : chunkCode(text);
+  const chunks = pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
+  const stem = name.replace(/\.[^.]+$/, '');
+  const pin = prose && (/^(true|yes|1)$/i.test(meta.pinned || '') || PINNED_NAME.test(stem));
+  return { chunks, pinned: pin ? { title: meta.title || name, text: text.trim().slice(0, 6000) } : null };
+}
+
+const chunkFile = (path, raw) => readNote(path, raw).chunks;
+
+module.exports = { chunkFile, readNote, frontMatter, chunkProse, chunkCode, isIndexable, htmlToText, notebookToText, extOf };

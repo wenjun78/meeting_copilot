@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const mock = require('./mock-server');
 const { tokenize } = require('../src/rag/tokenize');
-const { chunkFile, isIndexable } = require('../src/rag/chunker');
+const { chunkFile, readNote, isIndexable } = require('../src/rag/chunker');
 const { parseRepoSpec, fetchRepo, listRepos } = require('../src/rag/github');
 const { ingestUrl, liveSearch, itemsFromJson } = require('../src/rag/api');
 const { ingestFolder } = require('../src/rag/local');
@@ -65,7 +65,7 @@ test('parseRepoSpec accepts the common ways of naming a repo', () => {
 
 test('GitHub ingestion reads a tarball, flattens notebooks, skips binaries and vendored code', async () => {
   const r = await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { apiBase: srv.base + '/gh', token: 'ghp_x' });
-  assert.equal(r.files, 5);
+  assert.equal(r.files, 7);
   assert.equal(srv.log.github.at(-1), 'Bearer ghp_x');
   const paths = new Set(r.chunks.map(c => c.path));
   assert.ok(paths.has('etl-pipeline/README.md') && paths.has('etl-pipeline/src/dedupe.py') && paths.has('etl-pipeline/notebooks/eda.ipynb'));
@@ -473,4 +473,30 @@ test('the job description or brief for the meeting is always given to the model,
   cfg.context = '';
   await co.answer({ mode: 'typed', question: 'And monitoring?' });
   assert.ok(!/About this meeting/.test(chats[1]));
+});
+
+test('front matter is stripped, and pinned notes are picked up by flag or by file name', () => {
+  const about = readNote('knowledge/about.md', '---\ntitle: About Alex\npinned: true\n---\n# About\n\nAlex is based in Penang.');
+  assert.deepEqual(about.pinned, { title: 'About Alex', text: '# About\n\nAlex is based in Penang.' });
+  assert.ok(!about.chunks.some(c => /pinned: true|title: About/.test(c.text)), 'front matter is not indexed as content');
+  assert.equal(readNote('notes/skills.md', '---\ntitle: Skills\n---\nPython.').pinned, null);
+  for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
+  for (const name of ['jdbc.md', 'cv.md', 'jd.py']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
+  assert.equal(readNote('a.md', 'No front matter here.\n---\nnot: meta').pinned, null);
+});
+
+test('pinned notes from a repo reach the model with every answer and are replaced on re-sync', async () => {
+  const { co, chats } = scripted();
+  const repo = await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { apiBase: srv.base + '/gh' });
+  assert.deepEqual(repo.pinned.map(p => p.path).sort(), ['etl-pipeline/knowledge/_jd.md', 'etl-pipeline/knowledge/about.md']);
+  co.kb.setSource(repo, { kind: 'github', spec: 'wj/etl-pipeline' });
+  assert.deepEqual(co.kb.stats().sources[0].pinned.sort(), ['etl-pipeline/knowledge/_jd.md', 'etl-pipeline/knowledge/about.md']);
+  assert.equal(co.kb.stats().sources[0].pinned[0].text, undefined, 'only names go to the window');
+  await co.answer({ mode: 'typed', question: 'What is the weather like?' }); // nothing a search would match
+  assert.match(chats[0], /Pinned notes from my sources/);
+  assert.match(chats[0], /### _jd\.md \(etl-pipeline\/knowledge\/_jd\.md\)\n# Senior ML Engineer, Example Corp/);
+  assert.match(chats[0], /### About Alex \(etl-pipeline\/knowledge\/about\.md\)\n# About\n\nAlex Tan is an engineer based in Penang/);
+  co.kb.setSource({ ...repo, pinned: [] }, { kind: 'github', spec: 'wj/etl-pipeline' });
+  await co.answer({ mode: 'typed', question: 'And tomorrow?' });
+  assert.ok(!/Pinned notes/.test(chats[1]));
 });
