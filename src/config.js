@@ -6,6 +6,7 @@ const { DEFAULTS: SHORTCUTS } = require('./shortcuts');
 
 const DEFAULTS = {
   profile: '',
+  context: '',                        // this meeting: job description, agenda or brief; always given to the model
   autoAnswer: 'questions',            // 'questions' | 'off'
   autoSync: true,                     // re-read sources in the background when they change
   answerLength: 'short',              // 'short' | 'detailed'

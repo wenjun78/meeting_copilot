@@ -358,7 +358,7 @@ function fillSettings() {
   $('s-llm-extra').value = JSON.stringify(c.llm.extra || {});
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = c.stt.language; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
-  $('s-profile').value = c.profile; $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
+  $('s-profile').value = c.profile; $('s-context').value = c.context || ''; $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;
   $('s-gh-token').placeholder = keyHint(s.githubToken); $('s-gh-api').value = c.github.apiBase;
   $('s-api-url').value = c.api.searchUrl; $('s-api-hname').value = c.api.headerName; $('s-api-hvalue').placeholder = keyHint(s.apiHeader);
@@ -369,6 +369,16 @@ function fillSettings() {
   applyShortcutLabels();
   for (const id of ['s-llm-key', 's-stt-key', 's-gh-token', 's-api-hvalue', 's-embed-key']) $(id).value = '';
 }
+$('contextLoad').addEventListener('click', async () => {
+  try {
+    const r = await call('context:loadFile');
+    if (!r) return;
+    $('s-context').value = r.text;
+    toast(`${r.name} loaded${r.truncated ? ' (first 7,000 characters)' : ''}. Save settings to use it.`);
+  } catch (e) { fail(e); }
+});
+$('contextClear').addEventListener('click', () => { $('s-context').value = ''; });
+
 // Shortcut fields record the keys pressed in them instead of taking typed text.
 const SHORTCUT_FIELDS = [['answer', 's-key-answer'], ['screen', 's-key-screen'], ['toggle', 's-key-toggle']];
 function setShortcutField(input, accel, label) { input.dataset.accel = accel; input.value = label || (accel ? accel : ''); }
@@ -413,7 +423,7 @@ $('settings').addEventListener('submit', async (e) => {
   catch { $('s-llm-extra').focus(); return toast('Extra chat parameters must be a JSON object, for example {"reasoning_effort":"low"}.', 'error'); }
   const v = (id) => $(id).value.trim();
   const patch = {
-    profile: $('s-profile').value, autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value,
+    profile: $('s-profile').value, context: $('s-context').value, autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value,
     llm: { baseUrl: v('s-llm-base'), model: v('s-llm-model'), extra },
     stt: { baseUrl: v('s-stt-base'), model: v('s-stt-model'), language: v('s-stt-lang'), vocabulary: v('s-stt-vocab') },
     embed: { baseUrl: v('s-embed-base'), model: v('s-embed-model') },

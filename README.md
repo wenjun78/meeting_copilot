@@ -35,7 +35,7 @@ npm start
 1. **Settings**: paste an API key. The defaults point at Groq
    (`whisper-large-v3` for speech, `openai/gpt-oss-120b` for answers); any
    OpenAI-compatible service works by changing the base URL and model names.
-   Fill in "About you" and "Names and terms to get right".
+   Fill in "About you", "This meeting" and "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
    user owns), a GitHub URL, a folder, or a URL that returns a document or JSON.
 3. **Start listening** when the call begins and pick the meeting window or the
@@ -121,6 +121,14 @@ duplicates are filtered, but headphones give a cleaner transcript.
   `snippet` or `description`.
 - Retrieval is keyword-based (BM25) and works offline once synced. Set an
   embedding model under Advanced to add meaning-based matching.
+
+### The meeting itself: job description, agenda, brief
+
+Paste it into Settings > This meeting, or use "Load from a file" for a PDF or
+Word file. Unlike the sources above, which are searched per question, this
+text goes to the model with every answer, so replies lead with what the role
+or agenda asks for. It is treated as what the other side wants, not as your
+experience. Replace it before each different meeting.
 
 ### Staying up to date
 
