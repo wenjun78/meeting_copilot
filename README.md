@@ -115,6 +115,9 @@ duplicates are filtered, but headphones give a cleaner transcript.
   onto the window. Files are copied into the app's own folder, so they keep
   working if the originals move; "Open" on the "My files" row shows that
   folder for editing or deleting.
+- **Pasted text**: "Paste text" in the Knowledge tab saves what you paste
+  (from Word, a web page, an email) as a note in the same place. Give it a
+  name; pasting again under the same name replaces it.
 
 - **GitHub**: one request downloads the repository; Markdown, notebooks
   (outputs stripped), code, config, **PDF and Word (.docx)** files are split

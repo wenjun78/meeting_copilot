@@ -80,6 +80,15 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const mine = Object.values(kb.sources).find(x => x.label === 'My files');
     step('files added to the app', { result: addedFiles.value, pinned: mine && mine.pinned.map(p => p.path), found: kb.search('XLM-RoBERTa ticket routing', 4).some(h => h.path.endsWith('my cv.docx')) });
     if (!mine || mine.files !== 2 || mine.pinned.length !== 1 || addedFiles.value.skipped[0] !== 'photo.png') throw new Error('adding files did not behave as expected');
+
+    // Pasted text becomes a note in the same place; pasting under the same name replaces it.
+    await js(`document.getElementById('kbPaste').click()`);
+    await js(`(() => { document.getElementById('kbPasteName').value = 'Interview instructions: round 2?'; document.getElementById('kbPasteText').value = 'Keep answers short. Mention the Zanzibar migration project.'; document.getElementById('kbPasteForm').requestSubmit(); })()`);
+    await waitFor('pasted note saved', () => js(`document.getElementById('kbPasteForm').hidden && [...document.querySelectorAll('.toast')].some(t => /Saved/.test(t.textContent))`));
+    const second = await js(`window.mc.call('kb:addText', { name: 'Interview instructions: round 2?', text: 'Keep answers short. Mention the Kilimanjaro migration project.' })`);
+    const mine2 = Object.values(kb.sources).find(x => x.label === 'My files');
+    step('pasted text', { file: second.value.file, replaced: second.value.replaced, files: mine2.files, pinned: mine2.pinned.map(p => p.path), current: kb.search('Kilimanjaro migration', 2).length > 0, old: kb.search('Zanzibar', 2).length });
+    if (mine2.files !== 3 || !second.value.replaced || mine2.pinned.length !== 2 || kb.search('Zanzibar', 2).length) throw new Error('pasting text did not behave as expected');
     await js(`(async () => { document.getElementById('kbTryInput').value = 'fuzzy match threshold'; document.getElementById('kbTry').requestSubmit(); })()`);
     await waitFor('kb hits', () => js(`document.querySelectorAll('#kbHits li b').length > 0`));
     step('kb search', { top: await js(`document.querySelector('#kbHits li b').textContent`) });

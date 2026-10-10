@@ -345,6 +345,20 @@ function wireIpc() {
     if (!out.added.length && out.skipped.length) throw new Error(`Could not read ${out.skipped.join(', ')}. Use Markdown, text, PDF or Word files.`);
     return out;
   });
+  // Pasted text is saved as a note among the app's own files, named by the title given.
+  handle('kb:addText', async ({ name, text } = {}) => {
+    const body = String(text || '').trim();
+    if (!body) throw new Error('Paste some text first.');
+    if (body.length > 600000) throw new Error('That is too much text for one note. Split it into a few notes.');
+    const clean = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'Pasted note';
+    const file = /\.(md|txt)$/i.test(clean) ? clean : clean + '.md';
+    const dir = myFilesDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const replaced = fs.existsSync(path.join(dir, file));
+    fs.writeFileSync(path.join(dir, file), body + '\n');
+    const added = await syncOrigin({ kind: 'folder', spec: dir });
+    return { file, replaced, added };
+  });
   handle('kb:openFolder', (id) => {
     const src = kb.sources[id];
     if (src && src.origin && src.origin.kind === 'folder') shell.openPath(src.origin.spec);
