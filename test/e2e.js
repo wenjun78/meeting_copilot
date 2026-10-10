@@ -33,8 +33,10 @@ function fakeSpeechWav(file) {
     github: { apiBase: srv.base + '/gh' },
   }));
   const wav = path.join(tmp, 'speech.wav'); fakeSpeechWav(wav);
-  const electron = require('electron');
-  const args = ['.', '--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`];
+  // MC_E2E_BIN runs the test against a packaged build instead of the source tree.
+  const packaged = process.env.MC_E2E_BIN;
+  const electron = packaged || require('electron');
+  const args = [...(packaged ? [] : ['.']), '--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`];
   const useXvfb = process.platform === 'linux' && !process.env.DISPLAY;
   const cmd = useXvfb ? 'xvfb-run' : electron;
   const argv = useXvfb ? ['-a', '-s', '-screen 0 1600x900x24', electron, ...args] : args;

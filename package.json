@@ -7,16 +7,65 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test test/core.test.js",
-    "e2e": "node test/e2e.js"
+    "e2e": "node test/e2e.js",
+    "dist": "electron-builder --publish never"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "^1.0.0",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
-    "electron": "^44.7.0"
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
   },
   "engines": {
     "node": ">=20"
+  },
+  "author": "Lau Wen Jun",
+  "build": {
+    "appId": "io.github.wenjun78.meetingcopilot",
+    "productName": "Meeting Copilot",
+    "asar": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "renderer/**",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Meeting Copilot",
+      "artifactName": "Meeting-Copilot-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Meeting-Copilot-${version}-portable.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icon.png",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Transcribe your side of the meeting.",
+        "NSAudioCaptureUsageDescription": "Transcribe the other side of the meeting."
+      }
+    },
+    "linux": {
+      "target": "dir",
+      "icon": "build/icon.png"
+    }
   }
 }

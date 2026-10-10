@@ -8,7 +8,18 @@ repositories, documents and search API.
 It does not join the meeting as a bot and needs no Teams or Zoom admin
 approval: it listens to your computer's audio and looks at your screen.
 
-## Run it
+## Install it (Windows)
+
+Download **Meeting-Copilot-Setup** from the
+[Releases page](https://github.com/wenjun78/meeting_copilot/releases) and run
+it. It installs for your user only (no admin rights), adds Start menu and
+desktop shortcuts, and opens like any other app. The **portable** file runs
+without installing.
+
+The build is not code-signed, so Windows SmartScreen asks once: choose
+"More info", then "Run anyway".
+
+## Run from source
 
 Needs Node.js 20 or newer.
 
@@ -16,6 +27,10 @@ Needs Node.js 20 or newer.
 npm install
 npm start
 ```
+
+`npm run dist` builds the installer yourself into `dist/`.
+
+## First run
 
 1. **Settings**: paste an API key. The defaults point at Groq
    (`whisper-large-v3` for speech, `openai/gpt-oss-120b` for answers); any
