@@ -2,7 +2,7 @@
 // Turns a file into retrieval-sized chunks. Markdown/prose splits on headings
 // and paragraphs; code splits on line windows; notebooks are flattened first.
 
-const PROSE_EXT = new Set(['md', 'mdx', 'markdown', 'txt', 'rst', 'adoc', 'org', 'html', 'htm', '']);
+const PROSE_EXT = new Set(['md', 'mdx', 'markdown', 'txt', 'rst', 'adoc', 'org', 'html', 'htm', 'pdf', 'docx', '']);
 const CODE_EXT = new Set(['py', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'java', 'kt', 'go', 'rs', 'rb', 'php', 'cs', 'c', 'h',
   'cpp', 'hpp', 'swift', 'scala', 'r', 'sql', 'sh', 'bash', 'ps1', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'json', 'tf',
   'dockerfile', 'gradle', 'xml', 'css', 'scss', 'vue', 'svelte', 'ipynb', 'csv', 'tsv']);
@@ -25,14 +25,9 @@ function isIndexable(path, size = 0, maxBytes = 400_000) {
   if (ext === '' && !PLAIN_NAMES.test(path.split('/').pop())) return false;
   if (!(PROSE_EXT.has(ext) || CODE_EXT.has(ext) || ext === 'makefile')) return false;
   if (ext === 'ipynb') return size <= 8_000_000; // outputs are stripped, so allow big notebooks
+  if (ext === 'pdf' || ext === 'docx') return size <= 25_000_000; // text is extracted, so the file size says little
   if ((ext === 'json' || ext === 'csv' || ext === 'tsv' || ext === 'xml') && size > 60_000) return false;
   return size <= maxBytes;
-}
-
-function looksBinary(buf) {
-  const n = Math.min(buf.length, 4000);
-  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
-  return false;
 }
 
 function notebookToText(raw) {
@@ -134,17 +129,40 @@ function chunkCode(text, { maxLines = 70, overlapLines = 10, maxChars = 2400 } =
   return out;
 }
 
-// -> [{title, text, line?}]
-function chunkFile(path, raw) {
-  const ext = extOf(path);
-  let text = raw;
-  let prose = PROSE_EXT.has(ext);
-  if (ext === 'ipynb') { text = notebookToText(raw); prose = true; }
-  if (ext === 'html' || ext === 'htm') text = htmlToText(raw);
-  if (!text || !text.trim()) return [];
-  const name = path.split('/').pop();
-  const pieces = prose ? chunkProse(text) : chunkCode(text);
-  return pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
+// A leading "---" block of "key: value" lines, as used for notes in Markdown files.
+function frontMatter(text) {
+  const m = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  if (!m) return { meta: {}, body: text };
+  const meta = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([\w-]+)\s*:\s*(.*)$/.exec(line.trim());
+    if (kv) meta[kv[1].toLowerCase()] = kv[2].replace(/^["']|["']$/g, '').trim();
+  }
+  return { meta, body: text.slice(m[0].length) };
 }
 
-module.exports = { chunkFile, chunkProse, chunkCode, isIndexable, looksBinary, htmlToText, notebookToText, extOf };
+// A note is pinned (sent to the model with every answer, not only when a search finds it)
+// when its front matter says "pinned: true" or the file is named like a job description.
+const PINNED_NAME = /^_?(jd|job[-_ ]?descriptions?)$/i;
+
+// -> { chunks: [{title, text, line?}], pinned: null | {title, text} }
+function readNote(path, raw) {
+  const ext = extOf(path);
+  const name = path.split('/').pop();
+  let text = raw;
+  let prose = PROSE_EXT.has(ext);
+  let meta = {};
+  if (ext === 'ipynb') { text = notebookToText(raw); prose = true; }
+  else if (ext === 'html' || ext === 'htm') text = htmlToText(raw);
+  else if (prose) ({ meta, body: text } = frontMatter(String(raw || '')));
+  if (!text || !text.trim()) return { chunks: [], pinned: null };
+  const pieces = prose ? chunkProse(text) : chunkCode(text);
+  const chunks = pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
+  const stem = name.replace(/\.[^.]+$/, '');
+  const pin = prose && (/^(true|yes|1)$/i.test(meta.pinned || '') || PINNED_NAME.test(stem));
+  return { chunks, pinned: pin ? { title: meta.title || name, text: text.trim().slice(0, 6000) } : null };
+}
+
+const chunkFile = (path, raw) => readNote(path, raw).chunks;
+
+module.exports = { chunkFile, readNote, frontMatter, chunkProse, chunkCode, isIndexable, htmlToText, notebookToText, extOf };

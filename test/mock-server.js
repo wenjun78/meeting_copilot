@@ -3,6 +3,8 @@
 // user-owned search API. Used by the unit tests and the end-to-end smoke test.
 const http = require('http');
 const zlib = require('zlib');
+const fs = require('fs');
+const path = require('path');
 const { writeTar } = require('../src/rag/tar');
 
 const REPO_FILES = [
@@ -11,10 +13,15 @@ const REPO_FILES = [
   { path: 'wj-etl-pipeline-abc123/notebooks/eda.ipynb', data: JSON.stringify({ cells: [{ cell_type: 'markdown', source: ['# Exploratory analysis\n', 'Null rate per column before cleaning.'] }, { cell_type: 'code', source: 'df.isna().mean()', outputs: [{ text: 'x'.repeat(5000) }] }] }) },
   { path: 'wj-etl-pipeline-abc123/node_modules/junk/index.js', data: 'module.exports = 1' },
   { path: 'wj-etl-pipeline-abc123/logo.png', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]) },
+  { path: 'wj-etl-pipeline-abc123/knowledge/about.md', data: '---\ntitle: About Alex\npinned: true\n---\n# About\n\nAlex Tan is an engineer based in Penang who enjoys badminton.\n' },
+  { path: 'wj-etl-pipeline-abc123/knowledge/_jd.md', data: '# Senior ML Engineer, Example Corp\n\n## Must have\n\n- Kubernetes and model serving\n- Feature stores\n' },
+  { path: 'wj-etl-pipeline-abc123/cv/sample-cv.pdf', data: fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf')) },
+  { path: 'wj-etl-pipeline-abc123/cv/sample-cv.docx', data: fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-cv.docx')) },
 ];
 
-function start({ sttLines = ['Hello there.'], sttBusy = 0, answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92' } = {}) {
-  const log = { chat: [], stt: [], embed: [], search: [], github: [] };
+function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92' } = {}) {
+  const log = { chat: [], stt: [], embed: [], search: [], github: [], tarballs: 0 };
+  const state = { pushedAt };
   let sttIndex = 0;
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -58,12 +65,14 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, answer = 'I remove du
         const vec = (t) => [/dedup|duplicate|same compan|twice/i.test(t) ? 1 : 0, /schedul|cron|nightly/i.test(t) ? 1 : 0, 0.1];
         return json(200, { data: payload.input.map((t, index) => ({ index, embedding: vec(t) })) });
       }
-      if (url.pathname === '/gh/repos/wj/etl-pipeline') { log.github.push(req.headers.authorization || ''); return json(200, { default_branch: 'main', html_url: 'https://github.com/wj/etl-pipeline', description: 'Customer master ETL' }); }
+      if (url.pathname === '/gh/repos/wj/etl-pipeline') { log.github.push(req.headers.authorization || ''); return json(200, { default_branch: 'main', html_url: 'https://github.com/wj/etl-pipeline', description: 'Customer master ETL', pushed_at: state.pushedAt }); }
       if (url.pathname === '/gh/repos/wj/etl-pipeline/tarball/main') {
+        log.tarballs++;
         res.writeHead(200, { 'Content-Type': 'application/gzip' });
         return res.end(zlib.gzipSync(writeTar(REPO_FILES)));
       }
-      if (url.pathname === '/gh/users/wj/repos') return json(200, [{ name: 'etl-pipeline', owner: { login: 'wj' }, size: 10 }, { name: 'a-fork', owner: { login: 'wj' }, fork: true, size: 5 }]);
+      if (url.pathname === '/gh/users/wj/repos') return json(200, [{ name: 'etl-pipeline', owner: { login: 'wj' }, size: 10, default_branch: 'main', html_url: 'https://github.com/wj/etl-pipeline', description: 'Customer master ETL', pushed_at: state.pushedAt }, { name: 'a-fork', owner: { login: 'wj' }, fork: true, size: 5 }]);
+      if (url.pathname === '/gh/__push') { state.pushedAt = new Date().toISOString(); return json(200, { ok: true }); } // test helper: simulate a push
       if (url.pathname.startsWith('/gh/')) return json(404, { message: 'Not Found' });
       if (url.pathname === '/kb/search') {
         log.search.push({ q: url.searchParams.get('q'), auth: req.headers['x-api-key'] });
@@ -71,13 +80,14 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, answer = 'I remove du
       }
       if (url.pathname === '/kb/slow') return void setTimeout(() => json(200, []), 5000);
       if (url.pathname === '/kb/faq.json') return json(200, [{ question: 'What is CPM?', answer: 'CPM is the customer profile management system.' }, { question: 'Who approves new accounts?', answer: 'The account service team approves them.' }]);
+      if (url.pathname === '/kb/cv.pdf') { res.writeHead(200, { 'Content-Type': 'application/pdf' }); return res.end(fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf'))); }
       if (url.pathname === '/kb/page.html') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('<html><head><style>x{}</style></head><body><h1>Runbook</h1><p>Restart the loader with <b>systemctl restart loader</b>.</p><script>alert(1)</script></body></html>'); }
       json(404, { error: { message: 'no route' } });
     });
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => {
     const base = `http://127.0.0.1:${server.address().port}`;
-    resolve({ base, log, close: () => new Promise(r => { server.closeAllConnections(); server.close(r); }) });
+    resolve({ base, log, state, close: () => new Promise(r => { server.closeAllConnections(); server.close(r); }) });
   }));
 }
 
