@@ -1,0 +1,282 @@
+'use strict';
+const { EventEmitter } = require('events');
+const { detectQuestion } = require('./question');
+const { tokenize } = require('./rag/tokenize');
+
+// Holds the meeting state (transcript, shared-screen text) and produces
+// answer suggestions. No Electron dependencies, so it can be tested in Node.
+//
+// Events:
+//   'transcript' {type:'add'|'update'|'remove', entry:{id,who,text,t,pending}}
+//   'answer'     {type:'start'|'sources'|'delta'|'done'|'error', id, ...}
+//   'notice'     {level:'error'|'info', message}
+class Copilot extends EventEmitter {
+  constructor({ getConfig, llm, kb, liveSearch, debounceMs = 900 }) {
+    super();
+    this.getConfig = getConfig; this.llm = llm; this.kb = kb; this.liveSearch = liveSearch;
+    this.debounceMs = debounceMs;
+    this.entries = [];
+    this.screenText = '';
+    this.seq = 0;
+    this.answerSeq = 0;
+    this.pendingThem = 0;
+    this.lastAnsweredId = 0;
+    this.timer = null;
+    this.abort = null;
+    this.lastError = '';
+    this.lastRun = null;
+    this.speakingThem = false;
+    this.generation = 0;
+    this.sttTimeoutMs = 25000;
+  }
+
+  // Clears the conversation. Screen text is kept: the slide on screen has not changed.
+  reset() {
+    clearTimeout(this.timer);
+    if (this.abort) this.abort.abort();
+    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null;
+    this.pendingThem = 0; this.speakingThem = false;
+    this.generation = (this.generation || 0) + 1; // segments still being transcribed belong to the old meeting
+  }
+
+  // The renderer reports when the other side starts and stops making sound, so an
+  // answer is not fired while they are still mid-question.
+  setSpeaking(who, on) {
+    if (who !== 'them') return;
+    this.speakingThem = !!on;
+    if (on) clearTimeout(this.timer);
+    else setTimeout(() => this._maybeAutoAnswer(), 350); // covers a trailing sound too short to be a segment
+  }
+
+  // A finished stretch of speech from one side. who: 'them' | 'you'
+  async onSegment(who, wav, durationMs = 0) {
+    const generation = this.generation || 0;
+    const entry = { id: ++this.seq, who, text: '', t: Date.now() - durationMs, dur: durationMs, pending: true };
+    this.entries.push(entry);
+    this.emit('transcript', { type: 'add', entry: { ...entry } });
+    if (who === 'them') { this.pendingThem++; clearTimeout(this.timer); }
+    let text = '';
+    try {
+      const vocab = (this.getConfig().stt.vocabulary || '').trim();
+      text = await this.llm.transcribe(wav, { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(this.sttTimeoutMs) });
+    } catch (e) {
+      this._notice('error', e.name === 'TimeoutError' || e.name === 'AbortError' ? 'Transcription timed out. Check your connection.' : e.message);
+    }
+    if (generation !== (this.generation || 0)) return null; // meeting was cleared meanwhile
+    if (who === 'them') this.pendingThem--;
+    if (!text || (who === 'you' && this._isEchoOfThem(entry, text))) {
+      this._remove(entry);
+    } else {
+      entry.text = text; entry.pending = false;
+      this.emit('transcript', { type: 'update', entry: { ...entry } });
+      if (who === 'them') this._dropEchoesOf(entry);
+    }
+    if (who === 'them') this._maybeAutoAnswer();
+    return entry.pending ? null : entry;
+  }
+
+  _remove(entry) {
+    const i = this.entries.indexOf(entry);
+    if (i < 0) return;
+    this.entries.splice(i, 1);
+    this.emit('transcript', { type: 'remove', entry: { id: entry.id } });
+  }
+
+  // The microphone also hears the other side when speakers are used. Those copies are
+  // dropped, whichever of the two transcriptions comes back first.
+  _echoes(you, youText, them) {
+    if (you.t > them.t + them.dur + 3000 || them.t > you.t + you.dur + 3000) return false; // not at the same time
+    const mine = new Set(tokenize(youText));
+    if (mine.size < 3) return false;
+    const theirs = new Set(tokenize(them.text));
+    let hit = 0; for (const w of mine) if (theirs.has(w)) hit++;
+    return hit / mine.size >= 0.7;
+  }
+
+  _isEchoOfThem(you, text) {
+    return this.entries.some(e => e.who === 'them' && !e.pending && this._echoes(you, text, e));
+  }
+
+  _dropEchoesOf(them) {
+    for (const e of this.entries.filter(x => x.who === 'you' && !x.pending)) if (this._echoes(e, e.text, them)) this._remove(e);
+  }
+
+  setScreenText(text) { this.screenText = String(text || '').trim(); }
+
+  // The other side's most recent run of speech that has not been answered yet.
+  // A brief "yeah" or "mm-hm" from the user does not break the run; a real reply does.
+  _latestThemRun() {
+    const run = [];
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i];
+      if (e.pending) continue;
+      if (e.who === 'you') { if (tokenize(e.text).length < 4) continue; break; }
+      if (e.id <= this.lastAnsweredId) break;
+      if (run.length && run[0].t - e.t > 30000) break;
+      run.unshift(e);
+      if (run.length >= 4) break;
+    }
+    return run;
+  }
+
+  // If they carry on right after an answer was started, the new words belong to the same
+  // question: answer the whole thing rather than the tail on its own.
+  _withContinuation(run) {
+    const prev = this.lastRun;
+    const joined = prev && run.length && run[0].t - prev.end < 6000 && Date.now() - prev.at < 20000;
+    const text = (joined ? prev.text + ' ' : '') + run.map(e => e.text).join(' ');
+    const last = run[run.length - 1];
+    this.lastRun = { text, end: last.t + last.dur, at: Date.now() };
+    return text;
+  }
+
+  _maybeAutoAnswer() {
+    if (this.getConfig().autoAnswer !== 'questions' || this.pendingThem > 0 || this.speakingThem) return;
+    const run = this._latestThemRun();
+    if (!run.length) return;
+    const prev = this.lastRun;
+    const context = prev && run[0].t - prev.end < 6000 ? prev.text + ' ' : '';
+    if (!detectQuestion(context + run.map(e => e.text).join(' ')).ask) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
+      if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
+    }, this.debounceMs);
+  }
+
+  _notice(level, message) {
+    if (level === 'error' && message === this.lastError) return; // do not repeat the same failure for every segment
+    if (level === 'error') this.lastError = message;
+    this.emit('notice', { level, message });
+  }
+
+  // mode: 'auto' | 'manual' (answer the latest thing they said) | 'typed' | 'screen'
+  async answer({ mode = 'manual', question = '' } = {}) {
+    clearTimeout(this.timer);
+    if (this.abort) this.abort.abort();
+    const id = ++this.answerSeq;
+    const cfg = this.getConfig();
+
+    let asked = question.trim();
+    if (mode === 'auto' || mode === 'manual') {
+      let run = this._latestThemRun();
+      if (!run.length && mode === 'manual') {
+        // Nothing new: answer the last thing they said again.
+        const last = [...this.entries].reverse().find(e => e.who === 'them' && !e.pending);
+        if (last) run = [last];
+      }
+      if (!run.length) {
+        this.emit('answer', { type: 'error', id, message: 'Nothing from the other side to answer yet.' });
+        return '';
+      }
+      asked = this._withContinuation(run);
+      this.lastAnsweredId = run[run.length - 1].id;
+    }
+    if (mode === 'screen') {
+      if (!this.screenText) {
+        this.emit('answer', { type: 'error', id, message: 'No shared-screen text has been read yet. Pick a screen or window when you start listening.' });
+        return '';
+      }
+      asked = asked || 'Work out what the shared screen is asking of me (a question, a task, a query to write, an error to explain, a chart to comment on) and write my response to it.';
+    }
+    if (!asked) return '';
+
+    const ctl = new AbortController();
+    this.abort = ctl;
+    // For a bare "answer from the screen" the card shows a short label, not the instruction sent to the model.
+    this.emit('answer', { type: 'start', id, question: mode === 'screen' ? question.trim() : asked, mode });
+
+    try {
+      // Retrieval: the question, plus a little context when the question alone is too thin to search on.
+      let query = asked;
+      if (mode === 'screen') query = `${question} ${this.screenText.slice(0, 500)}`;
+      else if (tokenize(asked).length < 4) {
+        const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).map(e => e.text).join(' ');
+        query = `${asked} ${prev}`;
+      }
+      const [local, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
+      if (ctl.signal.aborted) return '';
+      const refs = [...live, ...local].slice(0, 7);
+      this.emit('answer', {
+        type: 'sources', id,
+        sources: refs.map((r, i) => ({ n: i + 1, title: r.title, path: r.path, url: r.url, snippet: r.text.slice(0, 280) })),
+      });
+
+      const messages = this._buildMessages({ asked, mode, refs, cfg });
+      const text = await this.llm.chatStream(messages, {
+        signal: ctl.signal,
+        maxTokens: cfg.answerLength === 'detailed' ? 1800 : 1000, // headroom for reasoning models; the prompt sets the real length
+        onDelta: (piece) => this.emit('answer', { type: 'delta', id, text: piece }),
+      });
+      if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
+      this.lastError = '';
+      this.emit('answer', { type: 'done', id, text });
+      return text;
+    } catch (e) {
+      if (ctl.signal.aborted) return '';
+      this.emit('answer', { type: 'error', id, message: e.message });
+      return '';
+    } finally {
+      if (this.abort === ctl) this.abort = null;
+    }
+  }
+
+  async _searchKb(query, signal) {
+    let vec = null;
+    if (this.llm.embedConfigured() && this.kb.stats().embedded) {
+      try {
+        const t = AbortSignal.timeout(1500);
+        vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
+      } catch { /* fall back to keyword search */ }
+    }
+    return this.kb.search(query, 6, vec);
+  }
+
+  async _searchLive(query, cfg) {
+    if (!cfg.api.searchUrl || !this.liveSearch) return [];
+    try {
+      return await this.liveSearch(cfg.api.searchUrl, query, { auth: cfg.api });
+    } catch (e) {
+      this._notice('error', `Your search API did not answer: ${e.message}`);
+      return [];
+    }
+  }
+
+  _buildMessages({ asked, mode, refs, cfg }) {
+    const detailed = cfg.answerLength === 'detailed';
+    const system = [
+      'You sit beside the user during a live video meeting and write what they could say next. The user reads your text at a glance while talking, so it must be ready to speak.',
+      'Format:',
+      '- Start with the answer itself in one or two sentences, first person, in plain spoken language. No preamble, no "You could say".',
+      `- Then up to ${detailed ? 6 : 4} short bullets ("- ") with the concrete facts, numbers, names or steps that back it up.`,
+      `- Stay under ${detailed ? 220 : 110} words. Reply in the language the question was asked in.`,
+      '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named, then one or two spoken sentences on how it works, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
+      'Grounding:',
+      '- The reference material comes from the user\'s own repositories, documents and API. Prefer it over general knowledge and cite it inline as [1], [2].',
+      '- Never invent specifics about the user\'s own work, employer, numbers or history. If the references and profile do not cover something, answer from general knowledge and add a final line starting "Check:" naming what the user should verify before saying it.',
+      '- The transcript comes from speech recognition and the screen text from OCR; both can contain errors. Read through obvious mis-hearings.',
+      '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
+    ].join('\n');
+
+    const convo = this.entries.filter(e => !e.pending).slice(-14)
+      .map(e => `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`).join('\n');
+    const parts = [];
+    if (cfg.profile && cfg.profile.trim()) parts.push(`About me:\n${cfg.profile.trim().slice(0, 2500)}`);
+    if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
+    if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? 5000 : 1800)}`);
+    if (refs.length) {
+      parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, 1500)}`).join('\n\n'));
+    } else parts.push('Reference material: none found for this question.');
+    parts.push(mode === 'screen'
+      ? `What I need: ${asked}\nBase the reply on the shared-screen text above. It is raw OCR of the whole screen, so ignore menus, toolbars, participant names and other clutter, and repair obvious OCR slips in names and code.`
+      : mode === 'typed' ? `My question: ${asked}` : `They just said: "${asked}"\nWrite what I should say.`);
+    return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
+  }
+
+  transcriptText() {
+    return this.entries.filter(e => !e.pending)
+      .map(e => `[${new Date(e.t).toLocaleTimeString()}] ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}`).join('\n');
+  }
+}
+
+module.exports = { Copilot };
