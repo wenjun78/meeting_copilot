@@ -26,6 +26,8 @@ function isIndexable(path, size = 0, maxBytes = 400_000) {
   if (!(PROSE_EXT.has(ext) || CODE_EXT.has(ext) || ext === 'makefile')) return false;
   if (ext === 'ipynb') return size <= 8_000_000; // outputs are stripped, so allow big notebooks
   if (ext === 'pdf' || ext === 'docx') return size <= 25_000_000; // text is extracted, so the file size says little
+  // Exported reports (R Markdown, Jupyter) embed their charts as images: tens of MB of file, a few pages of text.
+  if (ext === 'html' || ext === 'htm') return size <= 40_000_000;
   if ((ext === 'json' || ext === 'csv' || ext === 'tsv' || ext === 'xml') && size > 60_000) return false;
   return size <= maxBytes;
 }
@@ -45,10 +47,12 @@ function notebookToText(raw) {
 
 function htmlToText(html) {
   return html
+    .replace(/\r/g, '')
     .replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, ' ')
+    // A heading becomes one "#" line, even when the markup wraps it over several lines.
+    .replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, n, inner) => '\n' + '#'.repeat(+n) + ' ' + inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() + '\n')
     .replace(/<\/(p|div|li|h[1-6]|tr|section|article|br)>/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<h([1-6])[^>]*>/gi, (_, n) => '\n' + '#'.repeat(+n) + ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
@@ -154,7 +158,7 @@ function readNote(path, raw) {
   let prose = PROSE_EXT.has(ext);
   let meta = {};
   if (ext === 'ipynb') { text = notebookToText(raw); prose = true; }
-  else if (ext === 'html' || ext === 'htm') text = htmlToText(raw);
+  else if (ext === 'html' || ext === 'htm') text = htmlToText(raw).slice(0, 400000);
   else if (prose) ({ meta, body: text } = frontMatter(String(raw || '')));
   if (!text || !text.trim()) return { chunks: [], pinned: null };
   const pieces = prose ? chunkProse(text) : chunkCode(text);
