@@ -37,6 +37,20 @@ jobs:
           export MC_E2E_OUT="$PWD/e2e-out"
           node test/e2e.js
 
+      # A one-line result that shows on the run page for every kind of run.
+      - name: Summarise smoke test
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            let r; try { r = JSON.parse(fs.readFileSync('e2e-out/result.json', 'utf8')); } catch { r = { ok: false, error: 'no result.json', steps: [] }; }
+            const get = (n) => r.steps.find(s => s.name === n) || {};
+            const short = (o) => JSON.stringify(o).replace(/[\r\n%]/g, ' ').slice(0, 300);
+            console.log('::notice title=Windows smoke test::' + (r.ok ? 'passed' : 'FAILED ' + String(r.error || '').split('\n')[0]) + ' | update check: ' + short(get('update check')) + ' | files: ' + (fs.existsSync('dist') ? fs.readdirSync('dist').filter(f => /\.(exe|yml|blockmap)$/.test(f)).join(', ') : 'none'));
+          "
+
       - name: Post smoke test result on the pull request
         if: always() && github.event_name == 'pull_request'
         continue-on-error: true
@@ -72,6 +86,7 @@ jobs:
             echo "Release $tag already exists; bump the version in package.json to publish a new one."
             exit 0
           fi
-          gh release create "$tag" dist/*.exe --target "$GITHUB_SHA" \
+          # latest.yml and the .blockmap files are what installed copies read to update themselves.
+          gh release create "$tag" dist/*.exe dist/*.blockmap dist/latest.yml --target "$GITHUB_SHA" \
             --title "Meeting Copilot $tag" \
             --notes "Windows build. Download **Meeting-Copilot-Setup** to install it with Start menu and desktop shortcuts, or the **portable** file to run it without installing. The app is not code-signed, so Windows SmartScreen asks for confirmation the first time: choose More info, then Run anyway."

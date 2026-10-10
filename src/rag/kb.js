@@ -65,6 +65,7 @@ class KnowledgeBase {
     this.sources[result.id] = {
       id: result.id, label: result.label, url: result.url || '', files: result.files,
       chunkCount: result.chunks.length, syncedAt: now, checkedAt: now, version: result.version || '', origin,
+      pinned: result.pinned || [],
     };
     this._bm25 = null;
   }
@@ -126,8 +127,15 @@ class KnowledgeBase {
     return out;
   }
 
+  // Notes that go to the model with every answer: [{path, url, title, text}]
+  pinned() {
+    return Object.values(this.sources).flatMap(s => s.pinned || []);
+  }
+
   stats() {
-    return { sources: Object.values(this.sources), chunks: this.chunks.length, embedded: this.chunks.filter(c => c.vec).length, embedModel: this.embedModel };
+    // The pinned notes' text stays in the main process; the window only needs their names.
+    const sources = Object.values(this.sources).map(({ pinned, ...s }) => ({ ...s, pinned: (pinned || []).map(p => p.path) }));
+    return { sources, chunks: this.chunks.length, embedded: this.chunks.filter(c => c.vec).length, embedModel: this.embedModel };
   }
 }
 

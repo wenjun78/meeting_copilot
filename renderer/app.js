@@ -294,7 +294,10 @@ function renderKb(stats) {
     el('span', { class: 'label', title: s.label, text: s.label }),
     el('button', { class: 'btn quiet', type: 'button', text: 'Sync', onclick: () => kbRun(() => call('kb:sync', s.id), `${s.label} synced`) }),
     el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => renderKb(await call('kb:remove', s.id)) }),
-    el('span', { class: 'meta', text: `${s.files} ${s.files === 1 ? 'file' : 'files'}, ${s.chunkCount} passages, updated ${ago(s.syncedAt)}${s.checkedAt && s.checkedAt - s.syncedAt > 60000 ? `, checked ${ago(s.checkedAt)}` : ''}` }))));
+    el('span', { class: 'meta', text: `${s.files} ${s.files === 1 ? 'file' : 'files'}, ${s.chunkCount} passages, updated ${ago(s.syncedAt)}${s.checkedAt && s.checkedAt - s.syncedAt > 60000 ? `, checked ${ago(s.checkedAt)}` : ''}` }),
+    s.pinned && s.pinned.length ? el('span', { class: 'meta pin', text: `Always included: ${s.pinned.join(', ')}` }) : null)));
+  const pins = stats.sources.flatMap(x => x.pinned || []);
+  $('contextPins').textContent = pins.length ? `Also sent with every answer, from your sources: ${pins.join(', ')}` : 'Tip: a file named jd.md in one of your sources, or any note starting with "pinned: true", is included automatically and stays current.';
   $('kbStatus').textContent = stats.chunks ? `${stats.chunks} passages${stats.embedded ? `, ${stats.embedded} with embeddings` : ''}` : '';
   if (state.answer.status === 'idle') renderIdle();
 }
@@ -365,10 +368,24 @@ function fillSettings() {
   $('s-embed-model').value = c.embed.model; $('s-embed-base').value = c.embed.baseUrl; $('s-embed-key').placeholder = keyHint(s.embedKey);
   $('s-opacity').value = String(c.ui.opacity || 1);
   $('kbAuto').checked = c.autoSync !== false;
+  $('s-update').checked = c.autoUpdate !== false;
   for (const [action, id] of SHORTCUT_FIELDS) setShortcutField($(id), c.shortcuts[action] || '', state.labels[action] || '');
   applyShortcutLabels();
   for (const id of ['s-llm-key', 's-stt-key', 's-gh-token', 's-api-hvalue', 's-embed-key']) $(id).value = '';
 }
+$('updateCheck').addEventListener('click', async () => {
+  $('versionNote').textContent = 'Checking';
+  try {
+    const r = await call('update:check');
+    $('versionNote').textContent = !r.supported ? `Version ${state.version}. This copy does not update itself; get new versions from the Releases page.`
+      : r.state === 'error' ? `Could not check: ${r.error}`
+        : r.state === 'current' ? `Version ${state.version} is the latest.`
+          : r.state === 'ready' ? `Version ${r.version} is downloaded and installs when you close the app.`
+            : r.state === 'downloading' ? `Version ${r.version} is being downloaded.`
+              : `Version ${r.version} is available. It downloads once you are not in a meeting.`;
+  } catch (e) { $('versionNote').textContent = ''; fail(e); }
+});
+
 $('contextLoad').addEventListener('click', async () => {
   try {
     const r = await call('context:loadFile');
@@ -423,6 +440,7 @@ $('settings').addEventListener('submit', async (e) => {
   catch { $('s-llm-extra').focus(); return toast('Extra chat parameters must be a JSON object, for example {"reasoning_effort":"low"}.', 'error'); }
   const v = (id) => $(id).value.trim();
   const patch = {
+    autoUpdate: $('s-update').checked,
     profile: $('s-profile').value, context: $('s-context').value, autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value,
     llm: { baseUrl: v('s-llm-base'), model: v('s-llm-model'), extra },
     stt: { baseUrl: v('s-stt-base'), model: v('s-stt-model'), language: v('s-stt-lang'), vocabulary: v('s-stt-vocab') },
@@ -455,6 +473,9 @@ $('s-opacity').addEventListener('input', () => call('config:set', { ui: { opacit
 (async () => {
   const r = await call('config:get');
   state.cfg = r.config; state.saved = r.saved; state.labels = r.labels; state.platform = r.platform;
+  state.version = r.version;
+  $('versionNote').textContent = `Version ${r.version}${r.updates ? '' : ' (updates are installed by hand for this copy)'}`;
+  $('s-update').disabled = !r.updates;
   $('keyNote').textContent = r.encrypted ? 'Keys are encrypted with your OS account.' : 'Keys are stored unencrypted on this machine.';
   fillSettings(); fillDevices();
   renderKb(await call('kb:stats'));
