@@ -457,3 +457,20 @@ test('re-syncing a source keeps the embeddings of passages that did not change',
   assert.equal(kb.chunks[1].vec, undefined);
   assert.equal(kb.sources.s.version, 'v2');
 });
+
+test('the job description or brief for the meeting is always given to the model, with a guard against claiming it', async () => {
+  const { co, chats } = scripted();
+  const cfg = co.getConfig();
+  cfg.profile = 'Data engineer, five years of SQL and Python.';
+  cfg.context = 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.';
+  const seen = [];
+  const original = co.llm.chatStream;
+  co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
+  await co.answer({ mode: 'typed', question: 'Tell me about your experience with model serving.' });
+  assert.match(chats[0], /About me:\nData engineer, five years of SQL and Python\./);
+  assert.match(chats[0], /About this meeting \(job description, agenda or brief I was given\):\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.match(seen[0], /never present one of its requirements as the user's experience/);
+  cfg.context = '';
+  await co.answer({ mode: 'typed', question: 'And monitoring?' });
+  assert.ok(!/About this meeting/.test(chats[1]));
+});

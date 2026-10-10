@@ -11,6 +11,7 @@ const { KnowledgeBase } = require('./src/rag/kb');
 const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
+const { extractText } = require('./src/rag/extract');
 const shortcuts = require('./src/shortcuts');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -232,6 +233,18 @@ function wireIpc() {
   // While a shortcut field is being edited the shortcuts are released, so the keys reach the field.
   handle('shortcuts:suspend', (on) => { if (on) globalShortcut.unregisterAll(); else registerShortcuts(); return true; });
   handle('shortcuts:check', (accel) => ({ label: shortcuts.pretty(accel), problem: shortcuts.problem(accel) }));
+
+  // Reads a job description, agenda or brief from a file into the "This meeting" box.
+  handle('context:loadFile', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: 'Load a job description, agenda or brief',
+      filters: [{ name: 'Documents', extensions: ['pdf', 'docx', 'txt', 'md', 'html'] }] });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const file = r.filePaths[0];
+    if (fs.statSync(file).size > 25_000_000) throw new Error('That file is too large to read.');
+    const text = (await extractText(file.split(path.sep).join('/'), fs.readFileSync(file))).trim();
+    if (!text) throw new Error('No text could be read from that file. A scanned PDF has no text; paste the content instead.');
+    return { name: path.basename(file), text: text.slice(0, 7000), truncated: text.length > 7000 };
+  });
 
   handle('kb:stats', () => kb.stats());
   handle('kb:add', (text) => {
