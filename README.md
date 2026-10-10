@@ -104,10 +104,17 @@ duplicates are filtered, but headphones give a cleaner transcript.
 ## Knowledge sources
 
 - **GitHub**: one request downloads the repository; Markdown, notebooks
-  (outputs stripped), code and config files are split into passages. Add a
-  token in Settings for private repos. GitHub Enterprise: set the API URL.
+  (outputs stripped), code, config, **PDF and Word (.docx)** files are split
+  into passages. Add a token in Settings for private repos. GitHub
+  Enterprise: set the API URL.
+- **Your CV**: commit it to a repo as PDF, Word or Markdown and add that repo.
+  Scanned PDFs (pictures of pages) have no text to read; export from Word or
+  Google Docs instead. In a public repo the CV is public: use a private repo
+  and a token if it has your phone number or address.
 - **URL**: a JSON array or `{results|data|items: [...]}` becomes one passage
-  per record; HTML and Markdown are split by heading.
+  per record; HTML and Markdown are split by heading; a link to a PDF or Word
+  file is read as a document.
+- **Folder**: any folder on your computer, same file types.
 - **Your search API**: set a URL such as `https://host/search?q={query}` in
   Settings and it is called for every answer (2.5 s limit), with its results
   ranked first. Records are read from `text`, `content`, `body`, `answer`,
@@ -115,7 +122,13 @@ duplicates are filtered, but headphones give a cleaner transcript.
 - Retrieval is keyword-based (BM25) and works offline once synced. Set an
   embedding model under Advanced to add meaning-based matching.
 
-The index lives in the app's data folder; "Sync" refreshes a source.
+### Staying up to date
+
+With "Keep sources up to date automatically" on (the default), the app checks
+every source a few seconds after it opens and every 30 minutes after that.
+A repo that has not been pushed to is not downloaded again, so the check is
+one small request per repo. It pauses while you are listening to a meeting.
+"Sync" forces a full re-read at any time.
 
 ## Privacy
 

@@ -1,5 +1,7 @@
 'use strict';
+const crypto = require('crypto');
 const { chunkFile, chunkProse, htmlToText } = require('./chunker');
+const { extractText } = require('./extract');
 
 const TEXT_KEYS = ['text', 'content', 'body', 'answer', 'snippet', 'description', 'summary', 'markdown', 'page_content', 'chunk'];
 const TITLE_KEYS = ['title', 'name', 'question', 'heading', 'subject', 'id', 'key'];
@@ -49,8 +51,8 @@ async function getBody(fetchFn, url, auth, timeoutMs) {
     const res = await fetchFn(url, { headers: buildHeaders(auth), signal: ctl.signal });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const type = (res.headers.get('content-type') || '').toLowerCase();
-    const body = await res.text();
-    return { type, body };
+    const bytes = Buffer.from(await res.arrayBuffer());
+    return { type, bytes, body: bytes.toString('utf8') };
   } catch (e) {
     throw new Error(e.name === 'AbortError' ? `timed out after ${timeoutMs} ms` : e.message);
   } finally { clearTimeout(timer); }
@@ -66,10 +68,18 @@ function parseBody(type, body) {
 
 // Download a document or JSON collection once and chunk it for the index.
 async function ingestUrl(url, { auth, fetchFn = fetch, timeoutMs = 30000 } = {}) {
-  const { type, body } = await getBody(fetchFn, url, auth, timeoutMs);
-  const parsed = parseBody(type, body);
+  const { type, bytes, body } = await getBody(fetchFn, url, auth, timeoutMs);
   const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+  const version = crypto.createHash('sha1').update(bytes).digest('hex');
   const chunks = [];
+  // A PDF or Word document behind the URL (a hosted CV, a spec) is read as a document.
+  const docKind = type.includes('pdf') || /\.pdf($|[?#])/i.test(url) ? 'pdf' : type.includes('wordprocessingml') || /\.docx($|[?#])/i.test(url) ? 'docx' : '';
+  if (docKind) {
+    const name = decodeURIComponent(new URL(url).pathname.split('/').pop() || host).replace(/\.(pdf|docx)$/i, '') + '.' + docKind;
+    for (const c of chunkFile(name, await extractText(name, bytes))) chunks.push({ path: host, url, title: c.title, text: c.text });
+    return { id: `api:${url}`, label: url.replace(/^https?:\/\//, ''), url, version, chunks, files: 1, skipped: 0 };
+  }
+  const parsed = parseBody(type, body);
   if (parsed.json !== undefined) {
     for (const [i, it] of itemsFromJson(parsed.json).entries()) {
       const title = it.title || `${host} #${i + 1}`;
@@ -79,7 +89,7 @@ async function ingestUrl(url, { auth, fetchFn = fetch, timeoutMs = 30000 } = {})
     const name = decodeURIComponent(new URL(url).pathname.split('/').pop() || host);
     for (const c of chunkFile(/\.\w+$/.test(name) ? name : name + '.md', parsed.text)) chunks.push({ path: host, url, title: c.title, text: c.text });
   }
-  return { id: `api:${url}`, label: url.replace(/^https?:\/\//, ''), url, chunks, files: 1, skipped: 0 };
+  return { id: `api:${url}`, label: url.replace(/^https?:\/\//, ''), url, version, chunks, files: 1, skipped: 0 };
 }
 
 // Query a search endpoint at answer time. `template` contains {query}.

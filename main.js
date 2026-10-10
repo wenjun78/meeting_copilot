@@ -87,39 +87,82 @@ function publicConfig() {
 
 // ---- knowledge sources ------------------------------------------------------
 
-async function syncOrigin(origin) {
+// Reads one origin (a repo, every repo of a user, a URL or a folder) into the index.
+// quiet: a background refresh. Sources that have not changed are skipped without being
+// downloaded again, and nothing is reported unless something actually changed.
+async function syncOriginNow(origin, { quiet = false } = {}) {
   const cfg = config.get();
   const added = [];
+  const progress = (message) => { if (!quiet) send('kb', { type: 'progress', message }); };
+  const keep = (result) => {
+    const known = kb.sources[result.id];
+    if (result.unchanged || (quiet && known && known.version && known.version === result.version)) { kb.touch(result.id); return; }
+    kb.setSource(result, origin); added.push(result);
+  };
   if (origin.kind === 'github') {
     const opts = { token: cfg.github.token, fetchFn: netFetch, apiBase: (cfg.github.apiBase || 'https://api.github.com').replace(/\/+$/, '') };
     const spec = github.parseRepoSpec(origin.spec);
     const specs = spec.repo ? [spec] : await github.listRepos(spec.owner, opts);
     if (!specs.length) throw new Error(`No repositories found for "${spec.owner}".`);
     for (const [i, s] of specs.entries()) {
-      send('kb', { type: 'progress', message: `Reading ${s.owner}/${s.repo} (${i + 1} of ${specs.length})` });
+      progress(`Reading ${s.owner}/${s.repo} (${i + 1} of ${specs.length})`);
       try {
-        const result = await github.fetchRepo(s, opts);
-        kb.setSource(result, origin); added.push(result);
+        const known = kb.sources[github.specId(s)];
+        keep(await github.fetchRepo(s, { ...opts, knownVersion: quiet && known ? known.version : '' }));
       } catch (e) {
         if (specs.length === 1) throw e;
-        send('notice', { level: 'error', message: `${s.owner}/${s.repo}: ${e.message}` });
+        if (!quiet) send('notice', { level: 'error', message: `${s.owner}/${s.repo}: ${e.message}` });
       }
     }
   } else if (origin.kind === 'url') {
-    send('kb', { type: 'progress', message: `Fetching ${origin.spec}` });
+    progress(`Fetching ${origin.spec}`);
     const result = await api.ingestUrl(origin.spec, { auth: cfg.api, fetchFn: netFetch });
     if (!result.chunks.length) throw new Error('That URL returned nothing readable.');
-    kb.setSource(result, origin); added.push(result);
+    keep(result);
   } else if (origin.kind === 'folder') {
-    send('kb', { type: 'progress', message: `Reading ${origin.spec}` });
-    const result = ingestFolder(origin.spec);
-    if (!result.chunks.length) throw new Error('No readable text or code files in that folder.');
-    kb.setSource(result, origin); added.push(result);
+    progress(`Reading ${origin.spec}`);
+    const result = await ingestFolder(origin.spec);
+    if (!result.chunks.length) throw new Error('No readable text, code, PDF or Word files in that folder.');
+    keep(result);
   }
-  await embedIfConfigured();
+  if (added.length) await embedIfConfigured();
   kb.save();
-  send('kb', { type: 'changed', stats: kb.stats() });
+  if (added.length || !quiet) send('kb', { type: 'changed', stats: kb.stats() });
   return added.map(r => ({ label: r.label, files: r.files, chunks: r.chunks.length }));
+}
+
+// Syncs run one at a time, whether started by the user or by the background refresh.
+let syncQueue = Promise.resolve();
+function syncOrigin(origin, opts) {
+  const run = syncQueue.then(() => syncOriginNow(origin, opts));
+  syncQueue = run.catch(() => {});
+  return run;
+}
+
+function uniqueOrigins(sources) {
+  const origins = new Map();
+  for (const s of sources) if (s.origin) origins.set(s.origin.kind + '|' + s.origin.spec, s.origin);
+  return [...origins.values()];
+}
+
+// Background refresh: shortly after launch and then every half hour, but never during a
+// meeting, when the network and CPU are needed for the call.
+let meetingOn = false;
+let autoSyncFailure = '';
+async function autoSync() {
+  if (!config.get().autoSync || meetingOn) return { skipped: true };
+  let updated = 0;
+  const failures = [];
+  for (const origin of uniqueOrigins(Object.values(kb.sources))) {
+    if (meetingOn) break;
+    try { updated += (await syncOrigin(origin, { quiet: true })).length; } catch (e) { failures.push(`${origin.spec}: ${e.message}`); }
+  }
+  // Report a failure once, not every half hour.
+  const failure = failures.join(' ');
+  if (failure && failure !== autoSyncFailure) send('notice', { level: 'error', message: `Could not refresh some sources. ${failure}` });
+  autoSyncFailure = failure;
+  if (!updated) send('kb', { type: 'changed', stats: kb.stats() }); // shows the new "checked" time
+  return { updated, failures };
 }
 
 async function embedIfConfigured() {
@@ -174,7 +217,10 @@ function wireIpc() {
     config.update(patch);
     if (patch.ui && patch.ui.opacity && win) win.setOpacity(Math.max(0.35, Math.min(1, patch.ui.opacity)));
     if (patch.shortcuts) {
-      const failed = registerShortcuts();
+      setTimeout(autoSync, 8000);
+  setInterval(autoSync, 30 * 60 * 1000);
+
+  const failed = registerShortcuts();
       if (failed.length) send('notice', { level: 'error', message: shortcutFailure(failed) });
     }
     if (config.get().embed.model && config.get().embed.model !== before && kb.chunks.length) {
@@ -202,10 +248,8 @@ function wireIpc() {
   handle('kb:remove', (id) => { kb.removeSource(id); kb.save(); return kb.stats(); });
   handle('kb:sync', async (id) => {
     const all = Object.values(kb.sources);
-    const origins = new Map();
-    for (const s of id ? all.filter(x => x.id === id) : all) if (s.origin) origins.set(s.origin.kind + '|' + s.origin.spec, s.origin);
     const failures = [];
-    for (const origin of origins.values()) {
+    for (const origin of uniqueOrigins(id ? all.filter(x => x.id === id) : all)) {
       try { await syncOrigin(origin); } catch (e) { failures.push(`${origin.spec}: ${e.message}`); }
     }
     if (failures.length) throw new Error(failures.join(' '));
@@ -255,6 +299,7 @@ function wireIpc() {
   handle('ocr:clear', () => { copilot.setScreenText(''); return true; });
 
   handle('answer:ask', (req) => { copilot.answer(req || {}); return true; });
+  handle('meeting:listening', (on) => { meetingOn = !!on; return true; });
   handle('meeting:reset', () => { copilot.reset(); return true; });
   handle('meeting:export', async () => {
     const text = copilot.transcriptText();
@@ -320,7 +365,7 @@ app.whenReady().then(() => {
   const failed = registerShortcuts();
   if (failed.length) win.webContents.once('did-finish-load', () => send('notice', { level: 'error', message: shortcutFailure(failed) }));
 
-  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, globalShortcut, runShortcut });
+  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, globalShortcut, runShortcut });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (ocr) ocr.stop(); });
