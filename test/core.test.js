@@ -501,3 +501,16 @@ test('pinned notes from a repo reach the model with every answer and are replace
   await co.answer({ mode: 'typed', question: 'And tomorrow?' });
   assert.ok(!/Pinned notes/.test(chats[1]));
 });
+
+test('large exported HTML reports are read: embedded images are dropped, the text is kept', () => {
+  assert.equal(isIndexable('Forecasting.html', 24_000_000), true);
+  assert.equal(isIndexable('bundle.js', 24_000_000), false);
+  const image = '<img src="data:image/png;base64,' + 'A'.repeat(2_000_000) + '">';
+  const html = `<html><head><style>p{}</style><script>var x = "${'B'.repeat(50000)}"</script></head><body><h1>Forecasting numeric\r\n  data</h1>\r\n<p>The ridge model reached an RMSE of 4.2 on the held-out set.</p>${image}<h2>Method</h2><p>Ten-fold cross validation.</p></body></html>`;
+  const chunks = chunkFile('Forecasting.html', html);
+  const text = chunks.map(c => c.text).join('\n');
+  assert.match(text, /ridge model reached an RMSE of 4\.2/);
+  assert.ok(text.length < 400, 'no image or script payload in the text');
+  assert.equal(chunks[0].title, 'Forecasting.html — Forecasting numeric data', 'a heading wrapped over two lines stays one heading');
+  assert.match(text, /Method\nTen-fold cross validation/);
+});

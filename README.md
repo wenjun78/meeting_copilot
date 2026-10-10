@@ -130,6 +130,13 @@ duplicates are filtered, but headphones give a cleaner transcript.
 - **URL**: a JSON array or `{results|data|items: [...]}` becomes one passage
   per record; HTML and Markdown are split by heading; a link to a PDF or Word
   file is read as a document.
+- **A portfolio site on GitHub Pages**: add the repository behind it
+  (`owner/portfolio`) rather than the web address, so every page, notebook
+  and exported report is read, not only the front page. Large HTML reports
+  with embedded charts are fine: only their text is kept.
+- **LinkedIn**: LinkedIn does not let apps read profiles. On your profile
+  choose More > Save to PDF and add that file; repeat when the profile
+  changes.
 - **Folder**: any folder on your computer, same file types.
 - **Your search API**: set a URL such as `https://host/search?q={query}` in
   Settings and it is called for every answer (2.5 s limit), with its results

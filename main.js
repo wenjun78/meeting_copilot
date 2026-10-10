@@ -326,6 +326,9 @@ function wireIpc() {
   handle('kb:add', (text) => {
     const spec = String(text || '').trim();
     if (!spec) throw new Error('Enter a GitHub repository (owner/repo) or a URL.');
+    if (/^https?:\/\/([\w-]+\.)?linkedin\.com\//i.test(spec)) {
+      throw new Error('LinkedIn does not let apps read profiles. On your profile choose More > Save to PDF, then add that file with "Add files".');
+    }
     const isUrl = /^https?:\/\//i.test(spec) && !/^https?:\/\/(www\.)?github\.com\//i.test(spec);
     return syncOrigin({ kind: isUrl ? 'url' : 'github', spec });
   });
