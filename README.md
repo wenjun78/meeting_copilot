@@ -19,6 +19,14 @@ without installing.
 The build is not code-signed, so Windows SmartScreen asks once: choose
 "More info", then "Run anyway".
 
+### Updates
+
+The installed app updates itself: it checks this repository's releases a
+little after it opens and every few hours, downloads a new version in the
+background (never while you are listening to a meeting), and installs it when
+you close the app. Turn it off, or check by hand, under Settings > This app.
+The portable file does not update itself.
+
 ## Run from source
 
 Needs Node.js 20 or newer.
@@ -35,7 +43,7 @@ npm start
 1. **Settings**: paste an API key. The defaults point at Groq
    (`whisper-large-v3` for speech, `openai/gpt-oss-120b` for answers); any
    OpenAI-compatible service works by changing the base URL and model names.
-   Fill in "About you" and "Names and terms to get right".
+   Fill in "About you", "This meeting" and "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
    user owns), a GitHub URL, a folder, or a URL that returns a document or JSON.
 3. **Start listening** when the call begins and pick the meeting window or the
@@ -104,10 +112,17 @@ duplicates are filtered, but headphones give a cleaner transcript.
 ## Knowledge sources
 
 - **GitHub**: one request downloads the repository; Markdown, notebooks
-  (outputs stripped), code and config files are split into passages. Add a
-  token in Settings for private repos. GitHub Enterprise: set the API URL.
+  (outputs stripped), code, config, **PDF and Word (.docx)** files are split
+  into passages. Add a token in Settings for private repos. GitHub
+  Enterprise: set the API URL.
+- **Your CV**: commit it to a repo as PDF, Word or Markdown and add that repo.
+  Scanned PDFs (pictures of pages) have no text to read; export from Word or
+  Google Docs instead. In a public repo the CV is public: use a private repo
+  and a token if it has your phone number or address.
 - **URL**: a JSON array or `{results|data|items: [...]}` becomes one passage
-  per record; HTML and Markdown are split by heading.
+  per record; HTML and Markdown are split by heading; a link to a PDF or Word
+  file is read as a document.
+- **Folder**: any folder on your computer, same file types.
 - **Your search API**: set a URL such as `https://host/search?q={query}` in
   Settings and it is called for every answer (2.5 s limit), with its results
   ranked first. Records are read from `text`, `content`, `body`, `answer`,
@@ -115,7 +130,46 @@ duplicates are filtered, but headphones give a cleaner transcript.
 - Retrieval is keyword-based (BM25) and works offline once synced. Set an
   embedding model under Advanced to add meaning-based matching.
 
-The index lives in the app's data folder; "Sync" refreshes a source.
+### The meeting itself: job description, agenda, brief
+
+Sources above are searched per question. Two kinds of text are instead sent
+to the model with **every** answer, so replies lead with what the role or
+agenda asks for:
+
+- **Pasted**: Settings > This meeting (or "Load from a file" for a PDF or
+  Word file).
+- **Pinned notes in your sources**, which stay current with the repo: a file
+  named `jd.md` / `job-description.md` (also `.txt`, `.pdf`, `.docx`, or with
+  a leading underscore such as `_jd.md`), or any Markdown note whose first
+  lines are
+
+  ```
+  ---
+  title: About me
+  pinned: true
+  ---
+  ```
+
+A job description is treated as what the other side wants, not as your
+experience. Swap the file's content (or the pasted text) before each
+different meeting. The Knowledge tab shows which notes are pinned.
+
+**Writing notes.** Markdown works best for a CV and a job description: each
+`##` heading becomes its own searchable passage, a leading `---` block is
+read as settings rather than content, and changes show up as readable diffs.
+PDF and Word are read too, but multi-column layouts can come out in a jumbled
+order.
+
+### Staying up to date
+
+With "Keep sources up to date automatically" on (the default), the app checks
+every source a few seconds after it opens, every 30 minutes after that, and
+once more at the moment you press Start listening.
+A repo that has not been pushed to is not downloaded again, so the check is
+one small request per repo. Apart from that one check, it pauses while you are listening to a meeting.
+URLs you added are fetched again on the same schedule, and your search API is
+asked live for every answer, so it is always current.
+"Sync" forces a full re-read at any time.
 
 ## Privacy
 

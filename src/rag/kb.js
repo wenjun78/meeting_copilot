@@ -53,14 +53,25 @@ class KnowledgeBase {
 
   // origin: {kind:'github'|'url'|'folder', spec} - what the user added, used to sync again.
   setSource(result, origin = null) {
+    // Passages that did not change keep their embeddings, so a re-sync only embeds what is new.
+    const vecs = new Map();
+    for (const c of this.chunks) if (c.sourceId === result.id && c.vec) vecs.set(c.path + '\n' + c.title + '\n' + c.text, c.vec);
     this.chunks = this.chunks.filter(c => c.sourceId !== result.id);
-    for (const c of result.chunks) this.chunks.push({ sourceId: result.id, ...c });
+    for (const c of result.chunks) {
+      const vec = vecs.get(c.path + '\n' + c.title + '\n' + c.text);
+      this.chunks.push(vec ? { sourceId: result.id, ...c, vec } : { sourceId: result.id, ...c });
+    }
+    const now = Date.now();
     this.sources[result.id] = {
       id: result.id, label: result.label, url: result.url || '', files: result.files,
-      chunkCount: result.chunks.length, syncedAt: Date.now(), origin,
+      chunkCount: result.chunks.length, syncedAt: now, checkedAt: now, version: result.version || '', origin,
+      pinned: result.pinned || [],
     };
     this._bm25 = null;
   }
+
+  // The source was checked and had not changed.
+  touch(id) { if (this.sources[id]) this.sources[id].checkedAt = Date.now(); }
 
   removeSource(id) {
     this.chunks = this.chunks.filter(c => c.sourceId !== id);
@@ -116,8 +127,15 @@ class KnowledgeBase {
     return out;
   }
 
+  // Notes that go to the model with every answer: [{path, url, title, text}]
+  pinned() {
+    return Object.values(this.sources).flatMap(s => s.pinned || []);
+  }
+
   stats() {
-    return { sources: Object.values(this.sources), chunks: this.chunks.length, embedded: this.chunks.filter(c => c.vec).length, embedModel: this.embedModel };
+    // The pinned notes' text stays in the main process; the window only needs their names.
+    const sources = Object.values(this.sources).map(({ pinned, ...s }) => ({ ...s, pinned: (pinned || []).map(p => p.path) }));
+    return { sources, chunks: this.chunks.length, embedded: this.chunks.filter(c => c.vec).length, embedModel: this.embedModel };
   }
 }
 

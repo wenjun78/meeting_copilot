@@ -11,6 +11,7 @@ const { KnowledgeBase } = require('./src/rag/kb');
 const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
+const { extractText } = require('./src/rag/extract');
 const shortcuts = require('./src/shortcuts');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -82,44 +83,89 @@ function publicConfig() {
   const saved = { llmKey: !!c.llm.apiKey, sttKey: !!c.stt.apiKey, embedKey: !!c.embed.apiKey, githubToken: !!c.github.token, apiHeader: !!c.api.headerValue };
   c.llm.apiKey = c.stt.apiKey = c.embed.apiKey = c.github.token = c.api.headerValue = '';
   const labels = Object.fromEntries(Object.entries(c.shortcuts).map(([k, v]) => [k, shortcuts.pretty(v)]));
-  return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable() };
+  return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable(), version: app.getVersion(), updates: updater.supported };
 }
 
 // ---- knowledge sources ------------------------------------------------------
 
-async function syncOrigin(origin) {
+// Reads one origin (a repo, every repo of a user, a URL or a folder) into the index.
+// quiet: a background refresh. Sources that have not changed are skipped without being
+// downloaded again, and nothing is reported unless something actually changed.
+async function syncOriginNow(origin, { quiet = false } = {}) {
   const cfg = config.get();
   const added = [];
+  const progress = (message) => { if (!quiet) send('kb', { type: 'progress', message }); };
+  const keep = (result) => {
+    const known = kb.sources[result.id];
+    if (result.unchanged || (quiet && known && known.version && known.version === result.version)) { kb.touch(result.id); return; }
+    kb.setSource(result, origin); added.push(result);
+  };
   if (origin.kind === 'github') {
     const opts = { token: cfg.github.token, fetchFn: netFetch, apiBase: (cfg.github.apiBase || 'https://api.github.com').replace(/\/+$/, '') };
     const spec = github.parseRepoSpec(origin.spec);
     const specs = spec.repo ? [spec] : await github.listRepos(spec.owner, opts);
     if (!specs.length) throw new Error(`No repositories found for "${spec.owner}".`);
     for (const [i, s] of specs.entries()) {
-      send('kb', { type: 'progress', message: `Reading ${s.owner}/${s.repo} (${i + 1} of ${specs.length})` });
+      progress(`Reading ${s.owner}/${s.repo} (${i + 1} of ${specs.length})`);
       try {
-        const result = await github.fetchRepo(s, opts);
-        kb.setSource(result, origin); added.push(result);
+        const known = kb.sources[github.specId(s)];
+        keep(await github.fetchRepo(s, { ...opts, knownVersion: quiet && known ? known.version : '' }));
       } catch (e) {
         if (specs.length === 1) throw e;
-        send('notice', { level: 'error', message: `${s.owner}/${s.repo}: ${e.message}` });
+        if (!quiet) send('notice', { level: 'error', message: `${s.owner}/${s.repo}: ${e.message}` });
       }
     }
   } else if (origin.kind === 'url') {
-    send('kb', { type: 'progress', message: `Fetching ${origin.spec}` });
+    progress(`Fetching ${origin.spec}`);
     const result = await api.ingestUrl(origin.spec, { auth: cfg.api, fetchFn: netFetch });
     if (!result.chunks.length) throw new Error('That URL returned nothing readable.');
-    kb.setSource(result, origin); added.push(result);
+    keep(result);
   } else if (origin.kind === 'folder') {
-    send('kb', { type: 'progress', message: `Reading ${origin.spec}` });
-    const result = ingestFolder(origin.spec);
-    if (!result.chunks.length) throw new Error('No readable text or code files in that folder.');
-    kb.setSource(result, origin); added.push(result);
+    progress(`Reading ${origin.spec}`);
+    const result = await ingestFolder(origin.spec);
+    if (!result.chunks.length) throw new Error('No readable text, code, PDF or Word files in that folder.');
+    keep(result);
   }
-  await embedIfConfigured();
+  if (added.length) await embedIfConfigured();
   kb.save();
-  send('kb', { type: 'changed', stats: kb.stats() });
+  if (added.length || !quiet) send('kb', { type: 'changed', stats: kb.stats() });
   return added.map(r => ({ label: r.label, files: r.files, chunks: r.chunks.length }));
+}
+
+// Syncs run one at a time, whether started by the user or by the background refresh.
+let syncQueue = Promise.resolve();
+function syncOrigin(origin, opts) {
+  const run = syncQueue.then(() => syncOriginNow(origin, opts));
+  syncQueue = run.catch(() => {});
+  return run;
+}
+
+function uniqueOrigins(sources) {
+  const origins = new Map();
+  for (const s of sources) if (s.origin) origins.set(s.origin.kind + '|' + s.origin.spec, s.origin);
+  return [...origins.values()];
+}
+
+// Background refresh: shortly after launch and then every half hour, but never during a
+// meeting, when the network and CPU are needed for the call.
+const background = { started: false };
+let meetingOn = false;
+let autoSyncFailure = '';
+// force: the one refresh made as a meeting starts, so the CV and job description are current.
+async function autoSync({ force = false } = {}) {
+  if (!config.get().autoSync || (meetingOn && !force)) return { skipped: true };
+  let updated = 0;
+  const failures = [];
+  for (const origin of uniqueOrigins(Object.values(kb.sources))) {
+    if (meetingOn && !force) break;
+    try { updated += (await syncOrigin(origin, { quiet: true })).length; } catch (e) { failures.push(`${origin.spec}: ${e.message}`); }
+  }
+  // Report a failure once, not every half hour.
+  const failure = failures.join(' ');
+  if (failure && failure !== autoSyncFailure) send('notice', { level: 'error', message: `Could not refresh some sources. ${failure}` });
+  autoSyncFailure = failure;
+  if (!updated) send('kb', { type: 'changed', stats: kb.stats() }); // shows the new "checked" time
+  return { updated, failures };
 }
 
 async function embedIfConfigured() {
@@ -130,6 +176,52 @@ async function embedIfConfigured() {
   } catch (e) {
     send('notice', { level: 'error', message: `${e.message} Keyword search still works.` });
   }
+}
+
+// ---- app updates ---------------------------------------------------------------
+
+// The installed Windows app updates itself from the GitHub releases of this repository:
+// it checks shortly after launch and every few hours, downloads in the background (never
+// during a meeting) and installs when the app is closed. The portable exe and source runs
+// do not update themselves.
+const updater = { supported: false, state: 'off', version: '', error: '', pending: false, asked: false, lib: null };
+
+function setupUpdates() {
+  updater.supported = app.isPackaged && process.platform === 'win32' && !process.env.PORTABLE_EXECUTABLE_FILE;
+  if (!updater.supported) return;
+  const { autoUpdater } = require('electron-updater');
+  updater.lib = autoUpdater;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null;
+  autoUpdater.on('update-available', (info) => { updater.state = 'available'; updater.version = info.version; updater.pending = true; downloadUpdate(); });
+  autoUpdater.on('update-not-available', () => { updater.state = 'current'; });
+  autoUpdater.on('update-downloaded', (info) => {
+    updater.state = 'ready'; updater.version = info.version; updater.pending = false;
+    send('notice', { level: 'info', message: `Version ${info.version} is downloaded. It installs when you close the app.` });
+  });
+  autoUpdater.on('error', (e) => { updater.state = 'error'; updater.error = String(e && e.message || e).split('\n')[0]; });
+  setTimeout(() => checkForUpdate(), 20000);
+  setInterval(() => checkForUpdate(), 4 * 60 * 60 * 1000);
+}
+
+function downloadUpdate() {
+  if (!updater.pending || meetingOn || process.env.MC_E2E || !(config.get().autoUpdate || updater.asked)) return;
+  updater.pending = false;
+  updater.state = 'downloading';
+  updater.lib.downloadUpdate().catch(() => { updater.pending = true; });
+}
+
+// -> { supported, state, version?, error? }
+async function checkForUpdate({ manual = false } = {}) {
+  if (!updater.supported) return { supported: false, state: 'off' };
+  if (!manual && (!config.get().autoUpdate || meetingOn)) return { supported: true, state: updater.state };
+  if (manual) updater.asked = true; // asking by hand also downloads, even with automatic installs off
+  try {
+    const r = await updater.lib.checkForUpdates();
+    if (r && r.updateInfo) updater.version = r.updateInfo.version;
+  } catch (e) { updater.state = 'error'; updater.error = String(e && e.message || e).split('\n')[0]; }
+  return { supported: true, state: updater.state, version: updater.version, error: updater.state === 'error' ? updater.error : undefined };
 }
 
 // ---- shortcuts ---------------------------------------------------------------
@@ -187,6 +279,19 @@ function wireIpc() {
   handle('shortcuts:suspend', (on) => { if (on) globalShortcut.unregisterAll(); else registerShortcuts(); return true; });
   handle('shortcuts:check', (accel) => ({ label: shortcuts.pretty(accel), problem: shortcuts.problem(accel) }));
 
+  // Reads a job description, agenda or brief from a file into the "This meeting" box.
+  handle('context:loadFile', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: 'Load a job description, agenda or brief',
+      filters: [{ name: 'Documents', extensions: ['pdf', 'docx', 'txt', 'md', 'html'] }] });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const file = r.filePaths[0];
+    if (fs.statSync(file).size > 25_000_000) throw new Error('That file is too large to read.');
+    const text = (await extractText(file.split(path.sep).join('/'), fs.readFileSync(file))).trim();
+    if (!text) throw new Error('No text could be read from that file. A scanned PDF has no text; paste the content instead.');
+    return { name: path.basename(file), text: text.slice(0, 7000), truncated: text.length > 7000 };
+  });
+
+  handle('update:check', () => checkForUpdate({ manual: true }));
   handle('kb:stats', () => kb.stats());
   handle('kb:add', (text) => {
     const spec = String(text || '').trim();
@@ -202,10 +307,8 @@ function wireIpc() {
   handle('kb:remove', (id) => { kb.removeSource(id); kb.save(); return kb.stats(); });
   handle('kb:sync', async (id) => {
     const all = Object.values(kb.sources);
-    const origins = new Map();
-    for (const s of id ? all.filter(x => x.id === id) : all) if (s.origin) origins.set(s.origin.kind + '|' + s.origin.spec, s.origin);
     const failures = [];
-    for (const origin of origins.values()) {
+    for (const origin of uniqueOrigins(id ? all.filter(x => x.id === id) : all)) {
       try { await syncOrigin(origin); } catch (e) { failures.push(`${origin.spec}: ${e.message}`); }
     }
     if (failures.length) throw new Error(failures.join(' '));
@@ -255,6 +358,13 @@ function wireIpc() {
   handle('ocr:clear', () => { copilot.setScreenText(''); return true; });
 
   handle('answer:ask', (req) => { copilot.answer(req || {}); return true; });
+  handle('meeting:listening', (on) => {
+    const starting = !!on && !meetingOn;
+    meetingOn = !!on;
+    if (starting) autoSync({ force: true }).catch(() => {}); // not awaited: listening starts immediately
+    if (!on) downloadUpdate(); // an update found during the meeting is fetched once it ends
+    return true;
+  });
   handle('meeting:reset', () => { copilot.reset(); return true; });
   handle('meeting:export', async () => {
     const text = copilot.transcriptText();
@@ -317,10 +427,16 @@ app.whenReady().then(() => {
   wireIpc();
   createWindow();
 
+  // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
+  setupUpdates();
+  setTimeout(() => autoSync(), 8000);
+  setInterval(() => autoSync(), 30 * 60 * 1000);
+  background.started = true;
+
   const failed = registerShortcuts();
   if (failed.length) win.webContents.once('did-finish-load', () => send('notice', { level: 'error', message: shortcutFailure(failed) }));
 
-  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, globalShortcut, runShortcut });
+  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, background, globalShortcut, runShortcut });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (ocr) ocr.stop(); });
