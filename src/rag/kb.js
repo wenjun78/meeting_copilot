@@ -128,7 +128,7 @@ class KnowledgeBase {
       const c = this.chunks[index];
       taken.add(index);
       perFile.set(keyOf(c), (perFile.get(keyOf(c)) || 0) + 1);
-      out.push({ sourceId: c.sourceId, path: c.path, url: c.url, title: c.title, text: c.text, score });
+      out.push({ sourceId: c.sourceId, path: c.path, url: c.url, title: c.title, text: c.text, score, ...(c.qa ? { qa: c.qa } : {}) });
     };
     const top = ranked.length ? keyOf(this.chunks[ranked[0].index]) : '';
     if (top) {
@@ -152,6 +152,11 @@ class KnowledgeBase {
       take(r.index, r.score);
     }
     return out;
+  }
+
+  // Answers the user prepared for questions they expect: [{q, a}]
+  prepared() {
+    return this.chunks.filter(c => c.qa && c.qa.q && c.qa.a).map(c => ({ q: c.qa.q, a: c.qa.a }));
   }
 
   // Notes that go to the model with every answer: [{path, url, title, text}]

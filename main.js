@@ -15,6 +15,7 @@ const { extractText, extractDoc } = require('./src/rag/extract');
 const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
+const { QA_FILE, normalizePairs, parseQA } = require('./src/qa');
 const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -112,7 +113,7 @@ function publicConfig() {
 // Files added through the app are copied here, so they keep working if the originals move.
 const myFilesDir = () => path.join(app.getPath('userData'), 'my-files');
 
-// ---- sections: About me, CV, JD, Instructions, Publications, Portfolio -------------------------------
+// ---- sections: About me, CV, JD, Instructions, Q&A, Publications, Portfolio -------------------------------
 
 const slotDir = (slot) => path.join(myFilesDir(), slot.dir);
 const syncMine = () => (fs.existsSync(myFilesDir()) ? syncOrigin({ kind: 'folder', spec: myFilesDir() }) : Promise.resolve([]));
@@ -130,6 +131,26 @@ function slotInfo(slot) {
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch { /* no folder yet */ }
   return { id: slot.id, label: slot.label, title: slot.title, searched: !!slot.searched, text, files };
+}
+
+// Prepared answers: one list, kept as a file in the Q&A section.
+const qaFile = () => path.join(slotDir(slotById('qa')), QA_FILE);
+function qaList() {
+  try { return normalizePairs(JSON.parse(fs.readFileSync(qaFile(), 'utf8'))); } catch { return []; }
+}
+async function qaWrite(list) {
+  const pairs = normalizePairs(list);
+  if (pairs.length) { fs.mkdirSync(path.dirname(qaFile()), { recursive: true }); fs.writeFileSync(qaFile(), JSON.stringify(pairs, null, 2)); }
+  else fs.rmSync(qaFile(), { force: true });
+  await syncMine();
+  return pairs;
+}
+// Adds pairs to the list; a question that is already there gets the new answer.
+async function qaAppend(found) {
+  const before = qaList();
+  const known = new Set(before.map(p => p.q.toLowerCase()));
+  const list = await qaWrite([...before, ...found]);
+  return { added: found.filter(p => !known.has(p.q.toLowerCase())).length, updated: found.filter(p => known.has(p.q.toLowerCase())).length, list };
 }
 
 // Readable files inside a folder (and its sub-folders), for sections that take files flat.
@@ -433,6 +454,29 @@ function wireIpc() {
     fs.rmSync(path.join(slotDir(slot), safe), { force: true }); // the app's copy; the original file is untouched
     await syncMine();
     return slotInfo(slot);
+  });
+  handle('qa:list', () => qaList());
+  handle('qa:save', (list) => qaWrite(list));
+  handle('qa:importText', async (text) => {
+    const found = parseQA(String(text || ''));
+    if (!found.length) throw new Error('No questions with answers found. Write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?" with the answer beneath.');
+    return qaAppend(found);
+  });
+  handle('qa:importFiles', async (paths) => {
+    if (!Array.isArray(paths)) {
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: 'Add questions and answers from a file',
+        filters: [{ name: 'Documents and notes', extensions: ['docx', 'pdf', 'md', 'txt'] }, { name: 'All files', extensions: ['*'] }] });
+      if (r.canceled || !r.filePaths.length) return null;
+      paths = r.filePaths;
+    }
+    const found = [], empty = [];
+    for (const p of paths.filter(x => typeof x === 'string' && x)) {
+      let pairs = [];
+      try { if (fs.statSync(p).isFile() && isIndexable(path.basename(p), fs.statSync(p).size)) pairs = parseQA(await extractText(path.basename(p), fs.readFileSync(p))); } catch { /* unreadable */ }
+      if (pairs.length) found.push(...pairs); else empty.push(path.basename(p));
+    }
+    if (!found.length) throw new Error(`No questions with answers found in ${empty.join(', ')}. Write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?" with the answer beneath.`);
+    return { ...(await qaAppend(found)), empty };
   });
   // Everything the answers can draw on: what is sent every time, and every searchable file.
   handle('kb:inventory', () => {

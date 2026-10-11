@@ -5,6 +5,7 @@ const { pathToFileURL } = require('url');
 const { readNote, isIndexable } = require('./chunker');
 const { extractDoc, abstractOf } = require('./extract');
 const { NOTE, slotByDir } = require('../slots');
+const { QA_FILE, normalizePairs, parseQA } = require('../qa');
 
 function walk(dir, root, out, limit) {
   let entries;
@@ -31,9 +32,23 @@ async function ingestFolder(folder, { maxFiles = 2000, sections = false } = {}) 
   for (const f of list) {
     let st;
     try { st = fs.statSync(f.full); } catch { continue; }
-    if (!isIndexable(f.rel, st.size) || files >= maxFiles) { skipped++; continue; }
     const parts = f.rel.split('/');
     const slot = sections && parts.length > 1 ? slotByDir(parts[0]) : null;
+    // Q&A: the list of prepared answers (or a document of them) gives one passage per pair,
+    // each carrying its question and answer so it can be offered whole.
+    if (slot && slot.qa) {
+      let pairs = [];
+      try {
+        if (parts[1] === QA_FILE) pairs = normalizePairs(JSON.parse(fs.readFileSync(f.full, 'utf8')));
+        else if (isIndexable(f.rel, st.size)) pairs = parseQA((await extractDoc(f.rel, fs.readFileSync(f.full))).text);
+      } catch { /* unreadable list: nothing prepared */ }
+      if (!pairs.length) { skipped++; continue; }
+      files++; bytes += st.size; newest = Math.max(newest, st.mtimeMs);
+      const shown = `${slot.label}/${parts[1] === QA_FILE ? 'prepared answers' : parts.slice(1).join('/')}`;
+      for (const p of pairs) chunks.push({ path: shown, url: pathToFileURL(f.full).href, title: `Prepared answer: ${p.q}`, text: `Question: ${p.q}\nMy answer: ${p.a}`, qa: p });
+      continue;
+    }
+    if (!isIndexable(f.rel, st.size) || files >= maxFiles) { skipped++; continue; }
     const isTyped = !!slot && parts.length === 2 && parts[1] === NOTE;
     const paper = !!slot && !!slot.papers && !isTyped;
     const { text, name } = await extractDoc(f.rel, fs.readFileSync(f.full), { paper });
@@ -59,7 +74,7 @@ async function ingestFolder(folder, { maxFiles = 2000, sections = false } = {}) 
     if (note.pinned) pinned.push({ path: shown, url, ...note.pinned, ...(slot ? { slot: slot.id } : {}), ...(typed ? { typed: true } : {}) });
   }
   // Same files, same sizes, nothing modified since -> same version.
-  return { id: `folder:${folder}`, label: folder, url: '', version: `r2:${files}:${bytes}:${Math.round(newest)}`, chunks, pinned, files, skipped };
+  return { id: `folder:${folder}`, label: folder, url: '', version: `r3:${files}:${bytes}:${Math.round(newest)}`, chunks, pinned, files, skipped };
 }
 
 module.exports = { ingestFolder };

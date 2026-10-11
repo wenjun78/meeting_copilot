@@ -154,6 +154,7 @@ Everything lives in the **Knowledge** tab, organised by what it is:
 | CV | Your CV: paste it or add the PDF/Word file | Sent with every answer |
 | JD | The job description, agenda or brief for this meeting | Sent with every answer |
 | Instructions | Tone, length, what to stress or avoid | Sent with every answer |
+| Q&A | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or read from a file | Offered with every question, closest first (about 8,000 characters fit); when the question asked is the same or similar, the reply is built on your answer |
 | Publications | Your papers: add the PDF or Word file; type how you sum each one up | Searched section by section (methods, results, limitations); each paper's title and abstract, and what you typed, sent with every answer |
 | Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
 | Equipped | Nothing to fill in: it shows what the above adds up to | |

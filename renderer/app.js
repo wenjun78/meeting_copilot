@@ -337,7 +337,7 @@ $('onTop').addEventListener('click', async () => {
 window.mc.on('notice', (n) => toast(n.message, n.level));
 
 // ---- knowledge --------------------------------------------------------------
-// Sections (About me, CV, JD, Instructions, Publications, Portfolio) are the way in; typing, files and
+// Sections (About me, CV, JD, Instructions, Q&A, Publications, Portfolio) are the way in; typing, files and
 // drag-and-drop are how each one is filled. "Equipped" shows everything that results.
 const SECTION_TEXT = {
   about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
@@ -403,13 +403,15 @@ async function showSection(name) {
   if (kbView.busy) return;
   kbView.busy = true;
   try {
-    if (name !== kbView.name) { try { await saveSlot(true); } catch (e) { fail(e); } }
+    if (name !== kbView.name) { try { await saveSlot(true); await saveQaDraft(); } catch (e) { fail(e); } }
     kbView.name = name;
     for (const b of document.querySelectorAll('#slotTabs button')) b.setAttribute('aria-selected', String(b.dataset.view === name));
     $('slotPanel').hidden = !isTextSection(name);
     $('portfolioPanel').hidden = name !== 'portfolio';
     $('equippedPanel').hidden = name !== 'equipped';
+    $('qaPanel').hidden = name !== 'qa';
     if (isTextSection(name)) renderSlot(await call('slot:get', name));
+    else if (name === 'qa') renderQa(await call('qa:list'));
     else if (name === 'portfolio') await renderPortfolio();
     else await renderEquipped();
   } catch (e) { fail(e); } finally { kbView.busy = false; }
@@ -449,10 +451,80 @@ window.addEventListener('drop', async (e) => {
   if (!paths.length) return;
   // Dropped on a section: it goes there. Dropped anywhere else: it goes to Portfolio.
   const onKnowledge = !$('tab-knowledge').hidden;
+  if (onKnowledge && kbView.name === 'qa') return qaImport(() => call('qa:importFiles', paths));
   const target = onKnowledge && (isTextSection(kbView.name) || kbView.name === 'portfolio') ? kbView.name : 'portfolio';
   if (!onKnowledge || target !== kbView.name) { showTab('knowledge'); await showSection(target); }
   addFilesTo(target, paths);
 });
+
+// ---- Q&A: prepared answers ----
+// One list of question-and-answer pairs. The form adds a pair or, after "Edit", changes one.
+const qa = { list: [], editing: -1 };
+function renderQa(list) {
+  qa.list = list;
+  if (qa.editing >= list.length) qa.editing = -1;
+  $('qaList').replaceChildren(...list.map((p, i) => {
+    const li = el('li', { class: i === qa.editing ? 'editing' : '' },
+      el('span', { class: 'q', text: p.q }),
+      el('button', { class: 'btn quiet', type: 'button', text: 'Edit', onclick: () => { qa.editing = i; $('qaQ').value = p.q; $('qaA').value = p.a; renderQa(qa.list); $('qaA').focus(); } }),
+      el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => {
+        try { if (qa.editing === i) clearQaForm(); else if (qa.editing > i) qa.editing--; renderQa(await call('qa:save', qa.list.filter((_, k) => k !== i))); refreshIdle(); } catch (e) { fail(e); }
+      } }),
+      el('p', { class: 'a', text: p.a }));
+    for (const part of li.querySelectorAll('.q, .a')) part.addEventListener('click', () => { if (!String(getSelection())) li.classList.toggle('open'); });
+    return li;
+  }));
+  $('qaEmpty').hidden = list.length > 0;
+  $('qaAdd').textContent = qa.editing >= 0 ? 'Save changes' : 'Add';
+  $('qaCancel').hidden = qa.editing < 0;
+  const chars = list.reduce((n, p) => n + p.q.length + Math.min(p.a.length, 1200) + 8, 0);
+  $('qaState').textContent = qa.editing >= 0 ? 'Editing the highlighted answer' : !list.length ? ''
+    : `${num(list.length)} prepared ${list.length === 1 ? 'answer' : 'answers'}. ${chars <= 8000 ? 'All of them are offered with every question.' : 'The closest ones to each question are offered (about 8,000 characters fit).'}`;
+}
+function clearQaForm() { qa.editing = -1; $('qaQ').value = ''; $('qaA').value = ''; }
+// Adds what is in the form, or saves the edit. Nothing happens unless both boxes are filled.
+async function saveQaDraft() {
+  const q = $('qaQ').value.trim(), a = $('qaA').value.trim();
+  if (!q || !a) return false;
+  const list = qa.editing >= 0 ? qa.list.map((p, i) => (i === qa.editing ? { q, a } : p)) : [...qa.list, { q, a }];
+  const saved = await call('qa:save', list);
+  clearQaForm();
+  if (kbView.name === 'qa') renderQa(saved); else qa.list = saved;
+  refreshIdle();
+  return true;
+}
+$('qaForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const editing = qa.editing >= 0;
+    if (await saveQaDraft()) { toast(editing ? 'Answer updated' : 'Answer added'); $('qaQ').focus(); }
+    else toast('Fill in both the question and your answer.', 'error');
+  } catch (err) { fail(err); }
+});
+$('qaCancel').addEventListener('click', () => { clearQaForm(); renderQa(qa.list); });
+async function qaImport(run) {
+  try {
+    const r = await run();
+    if (!r) return false;
+    renderQa(r.list);
+    toast(`${r.added ? `Added ${num(r.added)} ${r.added === 1 ? 'answer' : 'answers'}` : 'Nothing new'}${r.updated ? `, updated ${num(r.updated)}` : ''}${r.empty && r.empty.length ? `. Nothing found in ${r.empty.join(', ')}` : ''}`);
+    refreshIdle();
+    return true;
+  } catch (e) { fail(e); return false; }
+}
+$('qaBulkAdd').addEventListener('click', async () => {
+  if (!$('qaBulk').value.trim()) return toast('Paste your questions and answers first.', 'error');
+  if (await qaImport(() => call('qa:importText', $('qaBulk').value))) $('qaBulk').value = '';
+});
+{
+  const zone = $('qaDrop');
+  const pick = () => qaImport(() => call('qa:importFiles', null));
+  zone.addEventListener('click', pick);
+  zone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  zone.addEventListener('dragenter', () => zone.classList.add('over'));
+  zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('over'); });
+  zone.addEventListener('drop', () => zone.classList.remove('over'));
+}
 
 // ---- portfolio ----
 async function renderPortfolio() {
