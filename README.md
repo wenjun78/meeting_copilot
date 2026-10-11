@@ -43,7 +43,7 @@ npm start
 1. **Settings**: paste an API key. The defaults point at Groq
    (`whisper-large-v3` for speech, `openai/gpt-oss-120b` for answers); any
    OpenAI-compatible service works by changing the base URL and model names.
-   Fill in "About you", "This meeting" and "Names and terms to get right".
+   Fill in "About you" and "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
    user owns), a GitHub URL, a folder, or a URL that returns a document or JSON.
 3. **Start listening** when the call begins and pick the meeting window or the
@@ -146,18 +146,16 @@ duplicates are filtered, but headphones give a cleaner transcript.
 - Retrieval is keyword-based (BM25) and works offline once synced. Set an
   embedding model under Advanced to add meaning-based matching.
 
-### The meeting itself: job description, agenda, brief
+### The meeting itself: job description, agenda, instructions
 
-Sources above are searched per question. Two kinds of text are instead sent
-to the model with **every** answer, so replies lead with what the role or
-agenda asks for:
+Everything you give the app lives in one place, the Knowledge tab. Most of it
+is searched per question. A few notes are instead sent to the model with
+**every** answer, so replies lead with what the role or agenda asks for:
 
-- **Pasted**: Settings > This meeting (or "Load from a file" for a PDF or
-  Word file).
-- **Pinned notes in your sources**, which stay current with the source: a
-  file whose name contains `jd`, `job description`, `instructions`, `agenda`
-  or `brief` as a word (`jd.md`, `JD - Data Engineer.pdf`,
-  `interview instructions.docx`), or any Markdown note whose first lines are
+- a note or file whose name contains `jd`, `job description`, `instructions`,
+  `agenda` or `brief` as a word (`JD - Data Engineer.pdf`,
+  `interview instructions`), or
+- any Markdown note whose first lines are
 
   ```
   ---
@@ -167,8 +165,10 @@ agenda asks for:
   ```
 
 A job description is treated as what the other side wants, not as your
-experience. Swap the file's content (or the pasted text) before each
-different meeting. The Knowledge tab shows which notes are pinned.
+experience. Replace the note before each different meeting. The Knowledge
+tab shows which notes are sent with every answer.
+
+Settings keeps only "About you": who you are and how you like to sound.
 
 **Writing notes.** Markdown works best for a CV and a job description: each
 `##` heading becomes its own searchable passage, a leading `---` block is
