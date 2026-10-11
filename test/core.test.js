@@ -59,6 +59,10 @@ test('parseRepoSpec accepts the common ways of naming a repo', () => {
   assert.deepEqual(parseRepoSpec('wj/etl@dev'), { owner: 'wj', repo: 'etl', ref: 'dev', subdir: '' });
   assert.deepEqual(parseRepoSpec('https://github.com/wj/etl/tree/main/docs/api'), { owner: 'wj', repo: 'etl', ref: 'main', subdir: 'docs/api' });
   assert.deepEqual(parseRepoSpec('https://github.com/wj/etl.git'), { owner: 'wj', repo: 'etl', ref: '', subdir: '' });
+  assert.deepEqual(parseRepoSpec('https://wenjun78.github.io/portfolio/'), { owner: 'wenjun78', repo: 'portfolio', ref: '', subdir: '' });
+  assert.deepEqual(parseRepoSpec('https://wenjun78.github.io/FIFA/RefVision/docs/refvision.html'), { owner: 'wenjun78', repo: 'FIFA', ref: '', subdir: '' });
+  assert.equal(parseRepoSpec('https://wenjun78.github.io/').repo, 'wenjun78.github.io');
+  assert.equal(parseRepoSpec('https://wenjun78.github.io/index.html').repo, 'wenjun78.github.io');
   assert.equal(parseRepoSpec('wj').repo, '');
   assert.throws(() => parseRepoSpec('not a repo!'));
 });
@@ -480,8 +484,9 @@ test('front matter is stripped, and pinned notes are picked up by flag or by fil
   assert.deepEqual(about.pinned, { title: 'About Alex', text: '# About\n\nAlex is based in Penang.' });
   assert.ok(!about.chunks.some(c => /pinned: true|title: About/.test(c.text)), 'front matter is not indexed as content');
   assert.equal(readNote('notes/skills.md', '---\ntitle: Skills\n---\nPython.').pinned, null);
-  for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
-  for (const name of ['jdbc.md', 'cv.md', 'jd.py']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
+  for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf', 'JD - Data Engineer.pdf', 'Lenovo_JD.docx',
+    'job description (final).md', 'interview instructions.md', 'agenda.txt', 'client-brief.md']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
+  for (const name of ['jdbc.md', 'cv.md', 'jd.py', 'briefcase.md', 'reinstructions.md', 'projects.md']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
   assert.equal(readNote('a.md', 'No front matter here.\n---\nnot: meta').pinned, null);
 });
 
@@ -499,4 +504,17 @@ test('pinned notes from a repo reach the model with every answer and are replace
   co.kb.setSource({ ...repo, pinned: [] }, { kind: 'github', spec: 'wj/etl-pipeline' });
   await co.answer({ mode: 'typed', question: 'And tomorrow?' });
   assert.ok(!/Pinned notes/.test(chats[1]));
+});
+
+test('large exported HTML reports are read: embedded images are dropped, the text is kept', () => {
+  assert.equal(isIndexable('Forecasting.html', 24_000_000), true);
+  assert.equal(isIndexable('bundle.js', 24_000_000), false);
+  const image = '<img src="data:image/png;base64,' + 'A'.repeat(2_000_000) + '">';
+  const html = `<html><head><style>p{}</style><script>var x = "${'B'.repeat(50000)}"</script></head><body><h1>Forecasting numeric\r\n  data</h1>\r\n<p>The ridge model reached an RMSE of 4.2 on the held-out set.</p>${image}<h2>Method</h2><p>Ten-fold cross validation.</p></body></html>`;
+  const chunks = chunkFile('Forecasting.html', html);
+  const text = chunks.map(c => c.text).join('\n');
+  assert.match(text, /ridge model reached an RMSE of 4\.2/);
+  assert.ok(text.length < 400, 'no image or script payload in the text');
+  assert.equal(chunks[0].title, 'Forecasting.html — Forecasting numeric data', 'a heading wrapped over two lines stays one heading');
+  assert.match(text, /Method\nTen-fold cross validation/);
 });

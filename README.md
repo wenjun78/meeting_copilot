@@ -111,6 +111,14 @@ duplicates are filtered, but headphones give a cleaner transcript.
 
 ## Knowledge sources
 
+- **Files**: press "Add files" in the Knowledge tab, or drop files or folders
+  onto the window. Files are copied into the app's own folder, so they keep
+  working if the originals move; "Open" on the "My files" row shows that
+  folder for editing or deleting.
+- **Pasted text**: "Paste text" in the Knowledge tab saves what you paste
+  (from Word, a web page, an email) as a note in the same place. Give it a
+  name; pasting again under the same name replaces it.
+
 - **GitHub**: one request downloads the repository; Markdown, notebooks
   (outputs stripped), code, config, **PDF and Word (.docx)** files are split
   into passages. Add a token in Settings for private repos. GitHub
@@ -122,6 +130,14 @@ duplicates are filtered, but headphones give a cleaner transcript.
 - **URL**: a JSON array or `{results|data|items: [...]}` becomes one passage
   per record; HTML and Markdown are split by heading; a link to a PDF or Word
   file is read as a document.
+- **A portfolio site on GitHub Pages**: paste its address
+  (`https://you.github.io/portfolio/`) or type `you/portfolio`. Either way
+  the repository behind the site is read, so every page, notebook and
+  exported report is covered, not only the front page. Large HTML reports
+  with embedded charts are fine: only their text is kept.
+- **LinkedIn**: LinkedIn does not let apps read profiles. On your profile
+  choose More > Save to PDF and add that file; repeat when the profile
+  changes.
 - **Folder**: any folder on your computer, same file types.
 - **Your search API**: set a URL such as `https://host/search?q={query}` in
   Settings and it is called for every answer (2.5 s limit), with its results
@@ -138,10 +154,10 @@ agenda asks for:
 
 - **Pasted**: Settings > This meeting (or "Load from a file" for a PDF or
   Word file).
-- **Pinned notes in your sources**, which stay current with the repo: a file
-  named `jd.md` / `job-description.md` (also `.txt`, `.pdf`, `.docx`, or with
-  a leading underscore such as `_jd.md`), or any Markdown note whose first
-  lines are
+- **Pinned notes in your sources**, which stay current with the source: a
+  file whose name contains `jd`, `job description`, `instructions`, `agenda`
+  or `brief` as a word (`jd.md`, `JD - Data Engineer.pdf`,
+  `interview instructions.docx`), or any Markdown note whose first lines are
 
   ```
   ---
