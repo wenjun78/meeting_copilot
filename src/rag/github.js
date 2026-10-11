@@ -3,7 +3,7 @@ const { readTarGz } = require('./tar');
 const { readNote, isIndexable } = require('./chunker');
 const { extractText } = require('./extract');
 
-// Accepts "owner", "owner/repo", "owner/repo@ref", "owner/repo/sub/dir" or a github.com URL.
+// Accepts "owner", "owner/repo", "owner/repo@ref", "owner/repo/sub/dir", a github.com URL or a GitHub Pages address.
 function parseRepoSpec(spec) {
   let s = String(spec || '').trim();
   if (!s) throw new Error('Enter a repository as owner/repo');
@@ -11,6 +11,13 @@ function parseRepoSpec(spec) {
   const url = /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)(?:\/([^/\s#?]+))?(?:\/(?:tree|blob)\/([^/\s#?]+)(?:\/([^#?\s]*))?)?/i.exec(s);
   if (url) {
     return { owner: url[1], repo: (url[2] || '').replace(/\.git$/, ''), ref: url[3] || '', subdir: (url[4] || '').replace(/\/+$/, '') };
+  }
+  // A GitHub Pages address is served from a repository: user.github.io/repo/ -> user/repo,
+  // and the bare user.github.io -> user/user.github.io.
+  const pages = /^https?:\/\/([\w-]+)\.github\.io(?:\/([^/\s#?]+))?/i.exec(s);
+  if (pages) {
+    const first = pages[2] && !/\.\w{2,5}$/.test(pages[2]) ? pages[2] : '';
+    return { owner: pages[1], repo: first || `${pages[1]}.github.io`, ref: '', subdir: '' };
   }
   const at = s.indexOf('@');
   if (at > 0) { ref = s.slice(at + 1).trim(); s = s.slice(0, at); }
