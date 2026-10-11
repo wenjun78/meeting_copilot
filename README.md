@@ -40,7 +40,7 @@ npm start
 
 ## First run
 
-1. **Settings**: choose the service (OpenAI by default, with `gpt-5.6-sol`
+1. **Settings**: choose the service (OpenAI by default, with `gpt-6.1-sol`
    for answers and `gpt-4o-transcribe` for speech; Groq is one click away,
    and any OpenAI-compatible service works) and paste its API key.
    Fill in "Names and terms to get right".

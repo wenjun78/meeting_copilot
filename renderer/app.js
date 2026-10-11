@@ -612,8 +612,8 @@ $('updateCheck').addEventListener('click', async () => {
 // `models` are suggestions for the answer model (any model name can be typed), with the price
 // per million tokens in and out as published in October 2026.
 const SERVICES = {
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' },
-    models: [['gpt-6-astra', 'most capable, $10 in / $50 out'], ['gpt-6.1-sol', 'balanced, $2 / $10'], ['gpt-5.6-sol', '$4 / $20'], ['gpt-6-luna', 'cheapest, $0.10 / $0.50']] },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' },
+    models: [['gpt-6.1-sol', 'default: balanced, $2 in / $10 out'], ['gpt-6-astra', 'most capable, $10 / $50'], ['gpt-5.6-sol', '$4 / $20'], ['gpt-6-luna', 'cheapest, $0.10 / $0.50']] },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' },
     models: [['openai/gpt-oss-120b', 'fast, $0.15 / $0.60'], ['openai/gpt-oss-20b', 'faster and smaller']] },
 };

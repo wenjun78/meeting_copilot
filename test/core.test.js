@@ -205,7 +205,19 @@ test('config store encrypts secrets at rest and keeps free-form extra params', (
   assert.equal(b.github.apiBase, 'https://ghe.example/api/v3');
   assert.equal(b.stt.model, 'gpt-4o-transcribe');
   assert.equal(b.llm.baseUrl, 'https://api.openai.com/v1');
-  assert.equal(b.llm.model, 'gpt-5.6-sol');
+  assert.equal(b.llm.model, 'gpt-6.1-sol');
+
+  // Settings saved while gpt-5.6-sol was the default move to the new default once; picking
+  // gpt-5.6-sol again afterwards sticks, and any other saved model is never touched.
+  const old = path.join(path.dirname(file), 'old.json');
+  fs.writeFileSync(old, JSON.stringify({ llm: { model: 'gpt-5.6-sol', apiKey: 'enc:' + crypto.encrypt('sk-kept') } }));
+  const c = new ConfigStore(old, crypto); c.load();
+  assert.equal(c.get().llm.model, 'gpt-6.1-sol');
+  assert.equal(c.get().llm.apiKey, 'sk-kept');
+  c.update({ llm: { model: 'gpt-5.6-sol' } });
+  assert.equal(new ConfigStore(old, crypto).load().llm.model, 'gpt-5.6-sol');
+  fs.writeFileSync(old, JSON.stringify({ llm: { model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1' } }));
+  assert.equal(new ConfigStore(old, crypto).load().llm.model, 'openai/gpt-oss-120b');
 });
 
 test('OCR cleanup drops icon noise and keeps real lines', () => {
