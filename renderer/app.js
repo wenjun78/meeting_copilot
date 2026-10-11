@@ -81,7 +81,7 @@ function renderIdle() {
     el('strong', { text: state.listening ? 'Listening. Answers appear here when they ask something.' : 'Answers appear here during your call.' }),
     el('ol', {},
       el('li', { class: hasKey ? 'done' : '', text: 'Add your API key under Settings.' }),
-      el('li', { class: hasKb ? 'done' : '', text: 'Add who you are, your CV and your repositories under Knowledge.' }),
+      el('li', { class: hasKb ? 'done' : '', text: 'Fill in About me, CV and JD under Knowledge.' }),
       el('li', { class: state.listening ? 'done' : '', text: 'Start listening when the meeting begins.' })));
   $('asked').hidden = true; $('sources').hidden = true; $('copy').hidden = true;
 }
@@ -120,7 +120,7 @@ window.mc.on('answer', (e) => {
     else { a.status = 'error'; a.error = e.message; }
   }
   cancelAnimationFrame(state.raf);
-  state.raf = requestAnimationFrame(renderAnswer);
+  state.raf = requestAnimationFrame(() => { renderAnswer(); updateSetupMode(); });
 });
 
 const ask = (req) => call('answer:ask', req).catch(fail);
@@ -224,6 +224,7 @@ function setListening(on) {
     tick(); state.clockTimer = setInterval(tick, 1000);
   } else $('clock').textContent = '';
   if (state.answer.status === 'idle') renderIdle();
+  updateSetupMode();
 }
 
 async function begin(sourceId) {
@@ -268,10 +269,17 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('picker'
 function showTab(name) {
   for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
   for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== `tab-${name}`;
+  updateSetupMode();
 }
-for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => showTab(b.dataset.tab));
+// While Knowledge or Settings is open and there is no call or answer, give them the whole window.
+function updateSetupMode() {
+  const tab = document.querySelector('.tabs button[aria-selected="true"]');
+  const settingUp = tab && (tab.dataset.tab === 'knowledge' || tab.dataset.tab === 'settings');
+  document.body.classList.toggle('setup', !!settingUp && !state.listening && state.answer.status === 'idle');
+}
+for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => { showTab(b.dataset.tab); if (b.dataset.tab === 'knowledge') showSection(kbView.name); });
 $('min').addEventListener('click', () => call('win:minimize'));
-$('max').addEventListener('click', () => call('win:maximize'));
+$('max').addEventListener('click', async () => { try { showMaximized(await call('win:maximize')); } catch (e) { fail(e); } });
 $('close').addEventListener('click', () => call('win:close'));
 $('compact').addEventListener('click', async () => {
   const on = await call('win:compact', !document.body.classList.contains('compact'));
@@ -279,127 +287,232 @@ $('compact').addEventListener('click', async () => {
   $('compact').setAttribute('aria-pressed', String(on));
 });
 document.querySelector('.bar').addEventListener('dblclick', (e) => { if (!e.target.closest('button')) call('win:maximize'); });
-window.mc.on('window', (w) => { $('max').title = w.maximized ? 'Restore' : 'Maximise'; });
+function showMaximized(on) {
+  document.body.classList.toggle('maximized', on);
+  $('max').title = on ? 'Restore down' : 'Maximise';
+  $('max').setAttribute('aria-label', $('max').title);
+}
+window.mc.on('window', (w) => showMaximized(!!w.maximized));
+$('onTop').addEventListener('click', async () => {
+  try {
+    const on = await call('win:onTop', $('onTop').getAttribute('aria-pressed') !== 'true');
+    $('onTop').setAttribute('aria-pressed', String(on));
+    toast(on ? 'Stays on top of other windows' : 'Behaves like a normal window: other windows can cover it');
+  } catch (e) { fail(e); }
+});
 window.mc.on('notice', (n) => toast(n.message, n.level));
 
 // ---- knowledge --------------------------------------------------------------
+// Sections (About me, CV, JD, Instructions, Portfolio) are the way in; typing, files and
+// drag-and-drop are how each one is filled. "Equipped" shows everything that results.
+const SECTION_TEXT = {
+  about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
+  cv: { what: 'Your CV. Paste it here or add the file. Sent with every answer.', hint: 'Paste your CV, or drop the PDF or Word file below.' },
+  jd: { what: 'The job description, agenda or brief for this meeting. Sent with every answer; replace it before a different meeting.', hint: 'Paste the job description, or drop the file below.' },
+  instructions: { what: 'How the answers should behave: tone, length, what to stress, what to avoid. Sent with every answer.', hint: 'Keep answers under 30 seconds. Lead with ...' },
+};
+const kbView = { name: 'about', savedText: '', busy: false };
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const num = (n) => n.toLocaleString('en-US');
+const isTextSection = (name) => name in SECTION_TEXT;
+
 function ago(t) {
   const m = Math.round((Date.now() - t) / 60000);
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
-function renderKb(stats) {
+
+function fileRows(list, slotId, after) {
+  return list.map(f => el('li', {},
+    el('span', { class: 'name', title: f.name, text: f.name }),
+    el('span', { class: 'size', text: fmtSize(f.size) }),
+    el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => { try { after(await call('slot:removeFile', slotId, f.name)); } catch (e) { fail(e); } } })));
+}
+
+function renderSlot(info) {
+  kbView.savedText = info.text;
+  $('slotText').value = info.text; // always replaced, so nothing carries over from another section
+  $('slotText').placeholder = SECTION_TEXT[info.id].hint;
+  $('slotText').setAttribute('aria-label', info.title);
+  $('slotWhat').textContent = SECTION_TEXT[info.id].what;
+  $('slotFiles').replaceChildren(...fileRows(info.files, info.id, renderSlot));
+  slotState();
+}
+function slotState() {
+  const n = $('slotText').value.trim().length;
+  const dirty = $('slotText').value.trim() !== kbView.savedText;
+  $('slotState').textContent = dirty ? 'Not saved yet' : n ? `Saved, ${num(n)} characters${n > 8000 ? '. The first 8,000 are sent with every answer; the rest is searched.' : ''}` : 'Nothing typed';
+  $('slotSave').disabled = !dirty;
+}
+async function saveSlot(quiet) {
+  if (!isTextSection(kbView.name) || $('slotText').value.trim() === kbView.savedText) return;
+  const name = kbView.name;
+  const info = await call('slot:save', name, $('slotText').value);
+  if (kbView.name === name) renderSlot(info); else kbView.savedText = '';
+  if (!quiet) toast(`${info.title} saved`);
+  refreshIdle();
+}
+$('slotSave').addEventListener('click', () => saveSlot(false).catch(fail));
+$('slotText').addEventListener('input', slotState);
+
+// Switching always completes: unsaved text in the section being left is saved first, then
+// the new section is loaded from what is stored.
+async function showSection(name) {
+  if (kbView.busy) return;
+  kbView.busy = true;
+  try {
+    if (name !== kbView.name) { try { await saveSlot(true); } catch (e) { fail(e); } }
+    kbView.name = name;
+    for (const b of document.querySelectorAll('#slotTabs button')) b.setAttribute('aria-selected', String(b.dataset.view === name));
+    $('slotPanel').hidden = !isTextSection(name);
+    $('portfolioPanel').hidden = name !== 'portfolio';
+    $('equippedPanel').hidden = name !== 'equipped';
+    if (isTextSection(name)) renderSlot(await call('slot:get', name));
+    else if (name === 'portfolio') await renderPortfolio();
+    else await renderEquipped();
+  } catch (e) { fail(e); } finally { kbView.busy = false; }
+}
+for (const b of document.querySelectorAll('#slotTabs button')) b.addEventListener('click', () => showSection(b.dataset.view));
+
+// ---- adding files: click a drop area, or drop onto it (or anywhere on the window) ----
+async function addFilesTo(slotId, paths) {
+  try {
+    if (isTextSection(kbView.name)) await saveSlot(true);
+    const r = await call('slot:addFiles', slotId, paths);
+    if (!r) return;
+    const parts = [];
+    if (r.added.length) parts.push(`Added ${r.added.join(', ')}`);
+    if (r.folders.length) parts.push(`Added folder ${r.folders.join(', ')}`);
+    if (r.skipped.length) parts.push(`Skipped (not a readable type): ${r.skipped.join(', ')}`);
+    toast(parts.join('. '), r.added.length || r.folders.length ? 'info' : 'error');
+    if (kbView.name === slotId) { if (isTextSection(slotId)) renderSlot(r.slot); else await renderPortfolio(); }
+    refreshIdle();
+  } catch (e) { fail(e); }
+}
+function wireDrop(zone, slotOf) {
+  zone.addEventListener('click', () => addFilesTo(slotOf(), null));
+  zone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addFilesTo(slotOf(), null); } });
+  zone.addEventListener('dragenter', () => zone.classList.add('over'));
+  zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('over'); });
+  zone.addEventListener('drop', () => zone.classList.remove('over'));
+}
+wireDrop($('slotDrop'), () => kbView.name);
+wireDrop($('portfolioDrop'), () => 'portfolio');
+const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+window.addEventListener('drop', async (e) => {
+  if (!hasFiles(e) || !e.dataTransfer.files.length) return;
+  e.preventDefault();
+  const paths = [...e.dataTransfer.files].map(f => window.mc.pathFor(f)).filter(Boolean);
+  if (!paths.length) return;
+  // Dropped on a section: it goes there. Dropped anywhere else: it goes to Portfolio.
+  const onKnowledge = !$('tab-knowledge').hidden;
+  const target = onKnowledge && (isTextSection(kbView.name) || kbView.name === 'portfolio') ? kbView.name : 'portfolio';
+  if (!onKnowledge || target !== kbView.name) { showTab('knowledge'); await showSection(target); }
+  addFilesTo(target, paths);
+});
+
+// ---- portfolio ----
+async function renderPortfolio() {
+  const [stats, slot] = await Promise.all([call('kb:stats'), call('slot:get', 'portfolio')]);
   state.kb = stats;
-  $('kbEmpty').hidden = stats.sources.length > 0;
-  $('kbList').replaceChildren(...stats.sources.map(s => el('li', {},
+  const sources = stats.sources.filter(s => !s.mine);
+  $('kbList').replaceChildren(...sources.map(s => el('li', {},
     el('span', { class: 'label', title: s.label, text: s.label }),
     s.origin && s.origin.kind === 'folder'
-      ? el('button', { class: 'btn quiet', type: 'button', text: 'Open', title: 'Open the folder to edit or delete files', onclick: () => call('kb:openFolder', s.id).catch(fail) })
+      ? el('button', { class: 'btn quiet', type: 'button', text: 'Open', title: 'Open the folder', onclick: () => call('kb:openFolder', s.id).catch(fail) })
       : el('button', { class: 'btn quiet', type: 'button', text: 'Sync', onclick: () => kbRun(() => call('kb:sync', s.id), `${s.label} synced`) }),
-    el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => renderKb(await call('kb:remove', s.id)) }),
-    el('span', { class: 'meta', text: `${s.files} ${s.files === 1 ? 'file' : 'files'}, ${s.chunkCount} passages, updated ${ago(s.syncedAt)}${s.checkedAt && s.checkedAt - s.syncedAt > 60000 ? `, checked ${ago(s.checkedAt)}` : ''}` }),
-    s.pinned && s.pinned.length ? el('span', { class: 'meta pin', text: `Always included: ${s.pinned.join(', ')}` }) : null)));
-  const pins = stats.sources.flatMap(x => x.pinned || []);
-  $('contextPins').textContent = pins.length
-    ? `Sent with every answer: ${pins.map(p => p.split('/').pop().replace(/\.md$/, '')).join(', ')}. Everything else is searched when a question relates to it.`
-    : 'Start with "Write a note" > About me. Notes you mark are sent with every answer; everything else is searched when a question relates to it.';
-  $('kbStatus').textContent = stats.chunks ? `${stats.chunks} passages${stats.embedded ? `, ${stats.embedded} with embeddings` : ''}` : '';
-  if (state.answer.status === 'idle') renderIdle();
+    el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: () => kbRun(() => call('kb:remove', s.id), `${s.label} removed`) }),
+    el('span', { class: 'meta', text: `${num(s.files)} ${s.files === 1 ? 'file' : 'files'}, ${num(s.chunkCount)} passages, updated ${ago(s.syncedAt)}${s.checkedAt && s.checkedAt - s.syncedAt > 60000 ? `, checked ${ago(s.checkedAt)}` : ''}` }))));
+  $('portfolioFiles').replaceChildren(...fileRows(slot.files, 'portfolio', () => renderPortfolio()));
+  $('kbEmpty').hidden = sources.length > 0 || slot.files.length > 0;
+  $('kbStatus').textContent = '';
 }
 async function kbRun(fn, doneMessage) {
-  for (const b of document.querySelectorAll('#tab-knowledge button')) b.disabled = true;
+  for (const b of document.querySelectorAll('#portfolioPanel button')) b.disabled = true;
   try {
     const r = await fn();
     if (r === null) return;
     const msg = typeof doneMessage === 'function' ? doneMessage(r) : doneMessage;
     if (msg) toast(msg);
-    renderKb(await call('kb:stats'));
-  } catch (e) { fail(e); renderKb(await call('kb:stats')); } finally {
-    for (const b of document.querySelectorAll('#tab-knowledge button')) b.disabled = false;
+  } catch (e) { fail(e); } finally {
+    for (const b of document.querySelectorAll('#portfolioPanel button')) b.disabled = false;
+    if (kbView.name === 'portfolio') await renderPortfolio().catch(fail);
+    refreshIdle();
   }
 }
 const addedMessage = (list) => (list.length === 1
-  ? `Added ${list[0].label}: ${list[0].chunks} passages from ${list[0].files} files`
-  : `Added ${list.length} repositories, ${list.reduce((n, x) => n + x.chunks, 0)} passages`);
+  ? `Added ${list[0].label}: ${num(list[0].chunks)} passages from ${num(list[0].files)} files`
+  : `Added ${list.length} repositories, ${num(list.reduce((n, x) => n + x.chunks, 0))} passages`);
 $('kbForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const v = $('kbInput').value.trim();
   if (v) kbRun(() => call('kb:add', v), (r) => { $('kbInput').value = ''; return addedMessage(r); });
 });
-const filesMessage = (r) => {
-  const parts = [];
-  if (r.added.length) parts.push(addedMessage(r.added).replace(/^Added My files: (\d+) passages from (\d+) files$/, 'Your files are in: $2 files, $1 passages'));
-  if (r.skipped.length) parts.push(`Skipped (not a readable type): ${r.skipped.join(', ')}`);
-  return parts.join('. ');
-};
-$('kbFiles').addEventListener('click', () => kbRun(() => call('kb:addFiles', null), filesMessage));
-// The note form: write or paste a note, choose whether it rides along with every answer or
-// is searched like the rest. Picking a name that already exists loads it for editing.
-const note = { byName: false };
-function noteHint() {
-  const on = $('kbPasteAlways').checked;
-  $('kbPasteHint').textContent = note.byName ? 'A note with this name is always sent with every answer (the first 6,000 characters).'
-    : on ? 'Sent with every answer (the first 6,000 characters). For instructions, the job description, who you are.'
-      : 'Searched when a question relates to it. For a CV, project notes, anything long.';
-}
-async function loadNote(name, always) {
-  $('kbPasteName').value = name;
-  for (const c of document.querySelectorAll('.chip')) c.setAttribute('aria-pressed', String(c.dataset.note === name));
-  let info = { exists: false, alwaysByName: false };
-  try { info = await call('kb:noteInfo', name); } catch { /* treat as a new note */ }
-  note.byName = !!info.alwaysByName;
-  if (info.exists) $('kbPasteText').value = info.text;
-  $('kbPasteAlways').checked = info.exists ? info.always : (note.byName || always);
-  $('kbPasteAlways').disabled = note.byName;
-  noteHint();
-  $('kbPasteText').focus();
-}
-function showPaste(on) {
-  $('kbPasteForm').hidden = !on;
-  $('kbPaste').setAttribute('aria-expanded', String(on));
-  if (on) { noteHint(); $('kbPasteName').focus(); }
-}
-$('kbPaste').addEventListener('click', () => showPaste($('kbPasteForm').hidden));
-$('kbPasteCancel').addEventListener('click', () => showPaste(false));
-for (const c of document.querySelectorAll('.chip')) c.addEventListener('click', () => loadNote(c.dataset.note, c.dataset.always === '1'));
-$('kbPasteName').addEventListener('change', () => { const n = $('kbPasteName').value.trim(); if (n) loadNote(n, $('kbPasteAlways').checked); });
-$('kbPasteAlways').addEventListener('change', noteHint);
-$('kbPasteForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const name = $('kbPasteName').value.trim(), text = $('kbPasteText').value;
-  if (!text.trim()) { $('kbPasteText').focus(); return toast('Write or paste some text first.', 'error'); }
-  kbRun(() => call('kb:addText', { name, text, always: $('kbPasteAlways').checked }), (r) => {
-    $('kbPasteName').value = ''; $('kbPasteText').value = ''; showPaste(false);
-    for (const c of document.querySelectorAll('.chip')) c.setAttribute('aria-pressed', 'false');
-    return `${r.replaced ? 'Updated' : 'Saved'} "${r.file.replace(/\.md$/, '')}": ${r.always ? 'sent with every answer' : 'searched when relevant'}`;
-  });
-});
-// Files and folders can also be dropped anywhere on the window.
-window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
-window.addEventListener('drop', (e) => {
-  if (!e.dataTransfer || !e.dataTransfer.files.length) return;
-  e.preventDefault();
-  const paths = [...e.dataTransfer.files].map(f => window.mc.pathFor(f)).filter(Boolean);
-  if (!paths.length) return;
-  showTab('knowledge');
-  kbRun(() => call('kb:addFiles', paths), filesMessage);
-});
 $('kbFolder').addEventListener('click', () => kbRun(() => call('kb:addFolder'), addedMessage));
-$('kbSyncAll').addEventListener('click', () => kbRun(() => call('kb:sync', null), 'All sources synced'));
+$('kbSyncAll').addEventListener('click', () => kbRun(() => call('kb:sync', null), 'All sources are up to date'));
 $('kbAuto').addEventListener('change', async () => {
   try { const r = await call('config:set', { autoSync: $('kbAuto').checked }); state.cfg = r.config; } catch (e) { fail(e); }
 });
+window.mc.on('kb', (e) => {
+  if (e.type === 'progress') $('kbStatus').textContent = e.message;
+  if (e.type === 'changed') {
+    state.kb = e.stats; refreshIdle();
+    if (kbView.name === 'portfolio' && !$('tab-knowledge').hidden && !kbView.busy) renderPortfolio().catch(() => {});
+    if (kbView.name === 'equipped' && !$('tab-knowledge').hidden && !kbView.busy) renderEquipped().catch(() => {});
+  }
+});
+
+// ---- equipped: exactly what the answers can draw on ----
+// A row that opens to show the text of one file as the app read it.
+function previewRow(label, meta, sourceId, filePath, cut) {
+  const body = el('pre', { class: 'preview-text', text: 'Loading' });
+  const details = el('details', {}, el('summary', {}, el('b', { title: label, text: label }), el('span', { class: cut ? 'cut' : '', text: meta })), body);
+  details.addEventListener('toggle', async () => {
+    if (!details.open || details.dataset.loaded) return;
+    details.dataset.loaded = '1';
+    try {
+      const r = await call('kb:fileText', { sourceId, path: filePath });
+      body.textContent = r.text + (r.more ? `\n\n... and ${num(r.more)} more characters` : '');
+    } catch (e) { body.textContent = e.message; }
+  });
+  return details;
+}
+async function renderEquipped() {
+  const inv = await call('kb:inventory');
+  const sent = inv.always.reduce((n, a) => n + a.sent, 0);
+  const files = inv.searched.reduce((n, s) => n + s.files.length, 0);
+  $('eqSummary').textContent = `${inv.always.length ? `${inv.always.length} ${inv.always.length === 1 ? 'note is' : 'notes are'} sent with every answer (${num(sent)} characters, about ${num(Math.round(sent / 6))} words).` : 'Nothing is sent with every answer yet.'} ${num(files)} ${files === 1 ? 'file' : 'files'} can be searched (${num(inv.passages)} passages).${inv.lean ? ' Lean mode is on, so less is sent.' : ''}`;
+  $('eqAlways').replaceChildren(...(inv.always.length ? inv.always.map(a => el('li', {},
+    previewRow(a.title, a.sent < a.chars ? (a.sent ? `first ${num(a.sent)} of ${num(a.chars)} characters sent` : `not sent: the limit is used up (${num(a.chars)} characters)`) : `${num(a.chars)} characters`, a.sourceId, a.path, a.sent < a.chars)))
+    : [el('li', {}, el('p', { class: 'empty', text: 'Fill in About me, CV and JD to give every answer your background and the role.' }))]));
+  const filter = $('eqFilter').value.trim().toLowerCase();
+  $('eqSearched').replaceChildren(...(inv.searched.length ? inv.searched.map(src => {
+    const shown = src.files.filter(f => !filter || f.path.toLowerCase().includes(filter));
+    if (filter && !shown.length) return null;
+    const passages = shown.reduce((n, f) => n + f.passages, 0);
+    const list = el('ul', {}, ...shown.slice(0, 400).map(f => el('li', {}, previewRow(f.path, `${num(f.passages)} ${f.passages === 1 ? 'passage' : 'passages'}`, src.id, f.path, false))),
+      shown.length > 400 ? el('li', {}, el('p', { class: 'empty', text: `and ${num(shown.length - 400)} more files. Use the filter to find one.` })) : null);
+    const d = el('details', {}, el('summary', {}, el('b', { title: src.label, text: src.label }), el('span', { text: `${num(shown.length)} ${shown.length === 1 ? 'file' : 'files'}, ${num(passages)} passages` })), list);
+    if (filter || shown.length <= 8) d.open = true;
+    return d;
+  }).filter(Boolean) : [el('p', { class: 'empty', text: 'Nothing to search yet. Add your CV, or a repository under Portfolio.' })]));
+}
+let eqTimer;
+$('eqFilter').addEventListener('input', () => { clearTimeout(eqTimer); eqTimer = setTimeout(() => renderEquipped().catch(fail), 200); });
 $('kbTry').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
     const hits = await call('kb:search', $('kbTryInput').value);
-    $('kbHits').replaceChildren(...(hits.length ? hits.map(h => el('li', {}, el('b', { text: h.title }), el('span', { text: h.snippet })))
+    $('kbHits').replaceChildren(...(hits.length ? hits.map(h => el('li', {}, el('b', { text: `${h.title}${h.path ? ` (${h.path})` : ''}` }), el('span', { text: h.snippet })))
       : [el('li', {}, el('span', { text: 'Nothing matched. Try the words they would use in the meeting.' }))]));
   } catch (err) { fail(err); }
 });
-window.mc.on('kb', (e) => {
-  if (e.type === 'progress') $('kbStatus').textContent = e.message;
-  if (e.type === 'changed') renderKb(e.stats);
-});
+
+// The start-up card ticks its steps off as sections are filled.
+async function refreshIdle() {
+  try { state.kb = await call('kb:stats'); } catch { /* keep the last known state */ }
+  if (state.answer.status === 'idle') renderIdle();
+}
 
 // ---- settings ---------------------------------------------------------------
 async function fillDevices() {
@@ -431,6 +544,8 @@ function fillSettings() {
   $('s-embed-model').value = c.embed.model; $('s-embed-base').value = c.embed.baseUrl; $('s-embed-key').placeholder = keyHint(s.embedKey);
   $('s-opacity').value = String(c.ui.opacity || 1);
   $('kbAuto').checked = c.autoSync !== false;
+  $('s-context').value = c.answerContext === 'lean' ? 'lean' : 'full';
+  $('onTop').setAttribute('aria-pressed', String(c.ui.onTop !== false));
   $('s-update').checked = c.autoUpdate !== false;
   for (const [action, id] of SHORTCUT_FIELDS) setShortcutField($(id), c.shortcuts[action] || '', state.labels[action] || '');
   applyShortcutLabels();
@@ -511,7 +626,7 @@ $('settings').addEventListener('submit', async (e) => {
   const v = (id) => $(id).value.trim();
   const patch = {
     autoUpdate: $('s-update').checked,
-    autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value,
+    autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value, answerContext: $('s-context').value,
     llm: { baseUrl: v('s-llm-base'), model: v('s-llm-model'), extra },
     stt: { baseUrl: v('s-stt-base'), model: v('s-stt-model'), language: v('s-stt-lang'), vocabulary: v('s-stt-vocab') },
     embed: { baseUrl: v('s-embed-base'), model: v('s-embed-model') },
@@ -548,7 +663,7 @@ $('s-opacity').addEventListener('input', () => call('config:set', { ui: { opacit
   $('s-update').disabled = !r.updates;
   $('keyNote').textContent = r.encrypted ? 'Keys are encrypted with your OS account.' : 'Keys are stored unencrypted on this machine.';
   fillSettings(); fillDevices();
-  renderKb(await call('kb:stats'));
+  state.kb = await call('kb:stats');
   renderAnswer();
   navigator.mediaDevices.addEventListener('devicechange', fillDevices);
 })().catch(fail);

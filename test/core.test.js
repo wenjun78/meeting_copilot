@@ -14,6 +14,7 @@ const { KnowledgeBase } = require('../src/rag/kb');
 const { LLM, cleanTranscript } = require('../src/llm');
 const { detectQuestion } = require('../src/question');
 const { ConfigStore } = require('../src/config');
+const { SLOTS, NOTE, planPinned, moveLooseFilesIntoSections } = require('../src/slots');
 const { Copilot } = require('../src/copilot');
 const { cleanOcrText } = require('../src/ocr');
 const shortcuts = require('../src/shortcuts');
@@ -473,8 +474,8 @@ test('a pinned job description reaches the model with a guard against claiming i
   const original = co.llm.chatStream;
   co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
   await co.answer({ mode: 'typed', question: 'Tell me about your experience with model serving.' });
-  assert.match(chats[0], /Pinned notes from my sources[^\n]*\n### About me\.md \(my-files\/About me\.md\)\nData engineer, five years of SQL and Python\./);
-  assert.match(chats[0], /### JD\.md \(my-files\/JD\.md\)\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.match(chats[0], /Pinned notes from my sources[^\n]*\n### About me\.md\nData engineer, five years of SQL and Python\./);
+  assert.match(chats[0], /### JD\.md\nSenior ML Engineer\. Must have: Kubernetes/);
   assert.ok(!/^About me:/m.test(chats[0]), 'no separate profile section any more');
   assert.match(seen[0], /never present one of its requirements as the user's experience/);
 });
@@ -497,7 +498,7 @@ test('text from the old Settings boxes is moved into notes once, and both are se
 
 test('front matter is stripped, and pinned notes are picked up by flag or by file name', () => {
   const about = readNote('knowledge/about.md', '---\ntitle: About Alex\npinned: true\n---\n# About\n\nAlex is based in Penang.');
-  assert.deepEqual(about.pinned, { title: 'About Alex', text: '# About\n\nAlex is based in Penang.' });
+  assert.deepEqual(about.pinned, { title: 'About Alex', text: '# About\n\nAlex is based in Penang.', chars: 33 });
   assert.ok(!about.chunks.some(c => /pinned: true|title: About/.test(c.text)), 'front matter is not indexed as content');
   assert.equal(readNote('notes/skills.md', '---\ntitle: Skills\n---\nPython.').pinned, null);
   for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf', 'JD - Data Engineer.pdf', 'Lenovo_JD.docx',
@@ -515,8 +516,8 @@ test('pinned notes from a repo reach the model with every answer and are replace
   assert.equal(co.kb.stats().sources[0].pinned[0].text, undefined, 'only names go to the window');
   await co.answer({ mode: 'typed', question: 'What is the weather like?' }); // nothing a search would match
   assert.match(chats[0], /Pinned notes from my sources/);
-  assert.match(chats[0], /### _jd\.md \(etl-pipeline\/knowledge\/_jd\.md\)\n# Senior ML Engineer, Example Corp/);
-  assert.match(chats[0], /### About Alex \(etl-pipeline\/knowledge\/about\.md\)\n# About\n\nAlex Tan is an engineer based in Penang/);
+  assert.match(chats[0], /### _jd\.md\n# Senior ML Engineer, Example Corp/);
+  assert.match(chats[0], /### About Alex\n# About\n\nAlex Tan is an engineer based in Penang/);
   co.kb.setSource({ ...repo, pinned: [] }, { kind: 'github', spec: 'wj/etl-pipeline' });
   await co.answer({ mode: 'typed', question: 'And tomorrow?' });
   assert.ok(!/Pinned notes/.test(chats[1]));
@@ -559,4 +560,118 @@ test('the prompt tells the model how to answer what the notes do not cover', asy
   assert.match(system, /answer only from the notes and references\. If they do not cover it, do not invent it/);
   assert.match(system, /salary expectation, notice period[^\n]*never state one/);
   assert.match(system, /General knowledge[^\n]*answer directly/);
+});
+
+// ---- sections --------------------------------------------------------------------------
+function sectionFolder() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mine-'));
+  const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
+  put('about-me/' + NOTE, 'I am a data engineer in Kuala Lumpur.');
+  put('cv/' + NOTE, '# CV\n\nBuilt ETL pipelines for 12 million records.');
+  fs.mkdirSync(path.join(dir, 'cv'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf'), path.join(dir, 'cv', 'Old resume.pdf'));
+  put('jd/Senior role.md', 'Senior ML Engineer. Must have Kubernetes.');
+  put('instructions/' + NOTE, 'Be professional when answering.');
+  put('portfolio/project notes.md', '# Zanzibar migration\n\nMoved 40 jobs to Airflow.');
+  return dir;
+}
+
+test('sections: everything outside Portfolio is sent with every answer, in section order, under the section name', async () => {
+  const dir = sectionFolder();
+  const r = await ingestFolder(dir, { sections: true });
+  assert.equal(r.files, 6);
+  assert.deepEqual(r.pinned.map(p => [p.slot, p.title, p.path]).sort(), [
+    ['about', 'About me', 'About me/typed text'],
+    ['cv', 'CV', 'CV/typed text'],
+    ['cv', 'CV: Old resume.pdf', 'CV/Old resume.pdf'],
+    ['instructions', 'Instructions for this meeting', 'Instructions/typed text'],
+    ['jd', 'Job description: Senior role.md', 'JD/Senior role.md'],
+  ]);
+  assert.ok(!r.pinned.some(p => p.slot === 'portfolio'), 'Portfolio is searched, not sent every time');
+  assert.ok(r.chunks.some(c => c.path === 'Portfolio/project notes.md' && /Airflow/.test(c.text)));
+  assert.ok(r.chunks.some(c => c.path === 'About me/typed text' && c.title === 'About me'), 'typed text is named after its section, not _note.md');
+
+  const { co, chats } = scripted();
+  co.kb.setSource(r, { kind: 'folder', spec: dir });
+  await co.answer({ mode: 'typed', question: 'Tell me about yourself.' });
+  const order = ['### About me\n', '### CV\n', '### CV: Old resume.pdf\n', '### Job description: Senior role.md\n', '### Instructions for this meeting\nBe professional when answering.'].map(h => chats[0].indexOf(h));
+  assert.ok(order.every(i => i >= 0), 'every section is in the prompt');
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'in section order');
+  assert.ok(!/### Portfolio/.test(chats[0]));
+  // the same folder read without sections falls back to the file-name rule
+  assert.equal((await ingestFolder(dir)).pinned.some(p => p.path.endsWith('about-me/_note.md')), false);
+});
+
+test('the send budget cuts long notes and reports what goes out; lean mode sends less', async () => {
+  const notes = [
+    { slot: 'instructions', title: 'Instructions', text: 'i'.repeat(500) },
+    { slot: 'cv', title: 'CV', text: 'c'.repeat(8000), chars: 30000 },
+    { title: 'repo note', text: 'r'.repeat(8000) },
+    { slot: 'about', title: 'About me', text: 'a'.repeat(1000) },
+    { slot: 'jd', title: 'JD', text: 'j'.repeat(7000) },
+  ];
+  const full = planPinned(notes);
+  assert.deepEqual(full.map(n => [n.title, n.sent]), [['About me', 1000], ['CV', 8000], ['JD', 7000], ['Instructions', 500], ['repo note', 3500]]);
+  assert.equal(full.reduce((n, x) => n + x.sent, 0), 20000);
+  const lean = planPinned(notes, { total: 6000, perNote: 2500 });
+  assert.deepEqual(lean.map(n => n.sent), [1000, 2500, 2500, 0, 0]);
+
+  const { co, chats } = scripted();
+  co.kb.setSource({ id: 's', label: 's', files: 1, chunks: [], pinned: notes });
+  co.getConfig().answerContext = 'lean';
+  await co.answer({ mode: 'typed', question: 'Hi there, a question.' });
+  assert.ok(chats[0].includes('c'.repeat(2500)) && !chats[0].includes('c'.repeat(2501)));
+  assert.ok(!chats[0].includes('### Instructions'), 'notes past the lean budget are left out');
+});
+
+test('a request the service calls too large is retried with less, and the answer still arrives', async () => {
+  const { co, answers } = scripted();
+  const sizes = [];
+  co.llm.chatStream = async (messages, { onDelta }) => {
+    sizes.push(messages[1].content.length);
+    if (sizes.length === 1) throw new Error('Answer failed (413). Request too large for model: tokens per minute (TPM) limit 8000, requested 9120.');
+    onDelta('Fine.'); return 'Fine.';
+  };
+  co.kb.setSource({ id: 's', label: 's', files: 1, chunks: [], pinned: [{ slot: 'cv', title: 'CV', text: 'c'.repeat(8000) }] });
+  const notices = [];
+  co.on('notice', n => notices.push(n.message));
+  const text = await co.answer({ mode: 'typed', question: 'Summarise my background please.' });
+  assert.equal(text, 'Fine.');
+  assert.ok(sizes[1] < sizes[0] - 5000, 'the second request is much smaller');
+  assert.match(notices[0], /less of your notes was sent/);
+  assert.equal(answers.at(-1).type, 'done');
+});
+
+test('loose notes from earlier versions are moved into their sections', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loose-'));
+  const put = (name, text) => fs.writeFileSync(path.join(dir, name), text);
+  put('About me.md', 'Engineer.'); put('JD.md', 'Role text.'); put('Instructions.md', 'Be brief.'); put('CV.md', 'My CV.');
+  put('JD - Platform Engineer.pdf', 'x'); put('Meeting brief.md', 'Old box.'); put('my resume 2026.docx', 'x');
+  put('Interview instructions round 2.md', 'More.'); put('Talking points.md', '---\npinned: true\n---\nMention X.'); put('project notes.md', 'Long.');
+  fs.mkdirSync(path.join(dir, 'cv'));
+  const moved = moveLooseFilesIntoSections(dir);
+  assert.equal(moved.length, 10);
+  const ls = (d) => fs.readdirSync(path.join(dir, d)).sort();
+  assert.deepEqual(ls('about-me'), [NOTE]);
+  assert.deepEqual(ls('cv'), [NOTE, 'my resume 2026.docx']);
+  assert.deepEqual(ls('jd'), ['JD - Platform Engineer.pdf', 'Meeting brief.md', NOTE]);
+  assert.deepEqual(ls('instructions'), ['Interview instructions round 2.md', 'Talking points.md', NOTE]);
+  assert.deepEqual(ls('portfolio'), ['project notes.md']);
+  assert.equal(fs.readFileSync(path.join(dir, 'about-me', NOTE), 'utf8'), 'Engineer.');
+  assert.deepEqual(moveLooseFilesIntoSections(dir), [], 'nothing left to move');
+  assert.equal(SLOTS.filter(s => !s.searched).length, 4);
+});
+
+test('the inventory lists every searchable file with its passages, and returns a file as it was read', async () => {
+  const kb = new KnowledgeBase(null);
+  const dir = sectionFolder();
+  kb.setSource({ ...(await ingestFolder(dir, { sections: true })), label: 'Your notes and files' }, { kind: 'folder', spec: dir });
+  kb.setSource(await fetchRepo(parseRepoSpec('wj/etl-pipeline'), { apiBase: srv.base + '/gh' }));
+  const inv = kb.inventory();
+  assert.deepEqual(inv.map(s => s.label), ['Your notes and files', 'wj/etl-pipeline']);
+  assert.deepEqual(inv[0].files.map(f => f.path), ['About me/typed text', 'CV/Old resume.pdf', 'CV/typed text', 'Instructions/typed text', 'JD/Senior role.md', 'Portfolio/project notes.md']);
+  assert.ok(inv[1].files.find(f => f.path === 'etl-pipeline/README.md').passages >= 1);
+  assert.equal(inv.reduce((n, s) => n + s.files.reduce((m, f) => m + f.passages, 0), 0), kb.chunks.length);
+  assert.match(kb.fileText(inv[0].id, 'Portfolio/project notes.md'), /Moved 40 jobs to Airflow/);
+  assert.ok(kb.pinned().every(p => p.sourceId), 'pinned notes know their source, so their text can be shown');
 });

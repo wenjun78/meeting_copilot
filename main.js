@@ -12,9 +12,10 @@ const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
 const { extractText } = require('./src/rag/extract');
-const { isIndexable, isPinnedName, frontMatter } = require('./src/rag/chunker');
+const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
+const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
 if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
@@ -31,6 +32,7 @@ let win, config, kb, llm, copilot, ocr;
 let chosenSourceId = null;      // screen/window picked in the renderer for the next capture
 let chosenDisplayId = null;
 let compactRestore = null;
+let maxRestore = null;          // window bounds before maximising, to restore down to
 
 const send = (event, payload) => { if (win && !win.isDestroyed()) win.webContents.send('mc:' + event, payload); };
 
@@ -45,7 +47,7 @@ function createWindow() {
     alwaysOnTop: true, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
-  win.setAlwaysOnTop(true, 'screen-saver'); // stay above a full-screen meeting window
+  applyOnTop();
   if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setOpacity(Math.max(0.35, Math.min(1, config.get().ui.opacity || 1)));
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -57,18 +59,26 @@ function createWindow() {
   const remember = () => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || compactRestore) return;
+      if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || compactRestore || maxRestore) return;
       config.update({ ui: { bounds: win.getBounds() } });
     }, 500);
   };
   win.on('resize', remember); win.on('move', remember);
   win.on('maximize', () => send('window', { maximized: true }));
-  win.on('unmaximize', () => send('window', { maximized: false }));
+  win.on('unmaximize', () => { maxRestore = null; send('window', { maximized: false }); });
   win.on('closed', () => { win = null; });
 }
 
 // Links come from indexed content and API responses, so only web links are opened, and
 // local files only when they sit inside a folder the user added themselves.
+// Staying above other windows is what makes this usable beside a full-screen meeting, but it
+// is the user's choice: with it off this behaves like any other window.
+function applyOnTop() {
+  if (!win || win.isDestroyed()) return;
+  if (config.get().ui.onTop !== false) win.setAlwaysOnTop(true, 'screen-saver');
+  else win.setAlwaysOnTop(false);
+}
+
 function openExternal(url) {
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
   if (!url.startsWith('file://')) return;
@@ -93,25 +103,67 @@ function publicConfig() {
 // Files added through the app are copied here, so they keep working if the originals move.
 const myFilesDir = () => path.join(app.getPath('userData'), 'my-files');
 
-// Copies files into the app's own folder and indexes it. Folders among the paths are added
-// as folder sources instead. -> { added: [...], skipped: [names] }
-async function addFiles(paths) {
-  const dir = myFilesDir();
-  const skipped = [];
-  let copied = 0;
-  const added = [];
+// ---- sections: About me, CV, JD, Instructions, Portfolio -------------------------------
+
+const slotDir = (slot) => path.join(myFilesDir(), slot.dir);
+const syncMine = () => (fs.existsSync(myFilesDir()) ? syncOrigin({ kind: 'folder', spec: myFilesDir() }) : Promise.resolve([]));
+
+// What a section holds: the text typed into it and the files added to it.
+function slotInfo(slot) {
+  const dir = slotDir(slot);
+  let text = '';
+  try { text = frontMatter(fs.readFileSync(path.join(dir, NOTE), 'utf8')).body.trim(); } catch { /* nothing typed yet */ }
+  let files = [];
+  try {
+    files = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isFile() && e.name !== NOTE)
+      .map(e => ({ name: e.name, size: fs.statSync(path.join(dir, e.name)).size })).sort((a, b) => a.name.localeCompare(b.name));
+  } catch { /* no folder yet */ }
+  return { id: slot.id, label: slot.label, title: slot.title, searched: !!slot.searched, text, files };
+}
+
+// Readable files inside a folder (and its sub-folders), for sections that take files flat.
+function filesUnder(dir, out = [], depth = 0) {
+  if (depth > 4 || out.length > 300) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) filesUnder(full, out, depth + 1); else if (e.isFile()) out.push(full);
+  }
+  return out;
+}
+
+// Copies files into a section. A folder dropped on Portfolio becomes a source that stays in
+// step with that folder; anywhere else its readable files are copied in.
+async function addToSlot(slot, paths) {
+  const dir = slotDir(slot);
+  const added = [], skipped = [], folders = [];
+  const queue = [];
   for (const p of paths || []) {
     let st;
     try { st = fs.statSync(p); } catch { continue; }
-    if (st.isDirectory()) { added.push(...await syncOrigin({ kind: 'folder', spec: p })); continue; }
+    if (st.isDirectory()) {
+      if (slot.searched) { await syncOrigin({ kind: 'folder', spec: p }); folders.push(path.basename(p)); }
+      else queue.push(...filesUnder(p));
+    } else if (st.isFile()) queue.push(p);
+  }
+  for (const p of queue) {
     const name = path.basename(p);
-    if (!st.isFile() || !isIndexable(name, st.size)) { skipped.push(name); continue; }
+    let size = 0;
+    try { size = fs.statSync(p).size; } catch { continue; }
+    if (name === NOTE || !isIndexable(name, size)) { skipped.push(name); continue; }
     fs.mkdirSync(dir, { recursive: true });
     if (path.resolve(p) !== path.join(dir, name)) fs.copyFileSync(p, path.join(dir, name));
-    copied++;
+    added.push(name);
   }
-  if (copied) added.push(...await syncOrigin({ kind: 'folder', spec: dir }));
-  return { added, skipped };
+  if (added.length) await syncMine();
+  return { added, skipped, folders, slot: slotInfo(slot) };
+}
+
+// Sources as the window needs them: the app's own files are marked, since the sections show them.
+function publicStats() {
+  const stats = kb.stats();
+  for (const src of stats.sources) src.mine = !!(src.origin && src.origin.spec === myFilesDir());
+  return stats;
 }
 
 // Reads one origin (a repo, every repo of a user, a URL or a folder) into the index.
@@ -148,18 +200,17 @@ async function syncOriginNow(origin, { quiet = false } = {}) {
     keep(result);
   } else if (origin.kind === 'folder') {
     const mine = origin.spec === myFilesDir();
-    progress(mine ? 'Reading your files' : `Reading ${origin.spec}`);
-    const result = await ingestFolder(origin.spec);
-    if (mine) result.label = 'My files';
+    progress(mine ? 'Reading your notes and files' : `Reading ${origin.spec}`);
+    const result = await ingestFolder(origin.spec, { sections: mine });
+    if (mine) result.label = 'Your notes and files';
     if (!result.chunks.length) {
-      // The last of the added files was deleted: drop the source instead of reporting an error.
-      if (mine && quiet) { kb.removeSource(result.id); added.push({ label: result.label, files: 0, chunks: [] }); }
-      else throw new Error(mine ? 'None of those files had text that could be read.' : 'No readable text, code, PDF or Word files in that folder.');
+      if (!mine) throw new Error('No readable text, code, PDF or Word files in that folder.');
+      kb.removeSource(result.id); added.push({ label: result.label, files: 0, chunks: [] }); // everything was removed
     } else keep(result);
   }
   if (added.length) await embedIfConfigured();
   kb.save();
-  if (added.length || !quiet) send('kb', { type: 'changed', stats: kb.stats() });
+  if (added.length || !quiet) send('kb', { type: 'changed', stats: publicStats() });
   return added.map(r => ({ label: r.label, files: r.files, chunks: r.chunks.length }));
 }
 
@@ -195,7 +246,7 @@ async function autoSync({ force = false } = {}) {
   const failure = failures.join(' ');
   if (failure && failure !== autoSyncFailure) send('notice', { level: 'error', message: `Could not refresh some sources. ${failure}` });
   autoSyncFailure = failure;
-  if (!updated) send('kb', { type: 'changed', stats: kb.stats() }); // shows the new "checked" time
+  if (!updated) send('kb', { type: 'changed', stats: publicStats() }); // shows the new "checked" time
   return { updated, failures };
 }
 
@@ -301,7 +352,7 @@ function wireIpc() {
       if (failed.length) send('notice', { level: 'error', message: shortcutFailure(failed) });
     }
     if (config.get().embed.model && config.get().embed.model !== before && kb.chunks.length) {
-      embedIfConfigured().then(() => { kb.save(); send('kb', { type: 'changed', stats: kb.stats() }); });
+      embedIfConfigured().then(() => { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); });
     }
     return publicConfig();
   });
@@ -311,7 +362,7 @@ function wireIpc() {
   handle('shortcuts:check', (accel) => ({ label: shortcuts.pretty(accel), problem: shortcuts.problem(accel) }));
 
   handle('update:check', () => checkForUpdate({ manual: true }));
-  handle('kb:stats', () => kb.stats());
+  handle('kb:stats', () => publicStats());
   handle('kb:add', async (text) => {
     const spec = String(text || '').trim();
     if (!spec) throw new Error('Enter a GitHub repository (owner/repo) or a URL.');
@@ -334,64 +385,61 @@ function wireIpc() {
     if (r.canceled || !r.filePaths[0]) return null;
     return syncOrigin({ kind: 'folder', spec: r.filePaths[0] });
   });
-  handle('kb:addFiles', async (paths) => {
+  handle('slot:list', () => SLOTS.map(slotInfo));
+  handle('slot:get', (id) => { const slot = slotById(id); if (!slot) throw new Error('Unknown section.'); return slotInfo(slot); });
+  handle('slot:save', async (id, text) => {
+    const slot = slotById(id);
+    if (!slot) throw new Error('Unknown section.');
+    const body = String(text || '').trim();
+    if (Buffer.byteLength(body) > 380000) throw new Error('That is more text than one section can hold (about 60,000 words). Put the long material in a file instead.');
+    const file = path.join(slotDir(slot), NOTE);
+    if (body) { fs.mkdirSync(slotDir(slot), { recursive: true }); fs.writeFileSync(file, body + '\n'); }
+    else fs.rmSync(file, { force: true });
+    await syncMine();
+    return slotInfo(slot);
+  });
+  handle('slot:addFiles', async (id, paths) => {
+    const slot = slotById(id);
+    if (!slot) throw new Error('Unknown section.');
     if (!Array.isArray(paths)) {
-      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: 'Add your CV, job description, notes',
-        filters: [{ name: 'Documents and notes', extensions: ['md', 'txt', 'pdf', 'docx', 'html', 'ipynb', 'py', 'sql', 'json', 'csv'] }, { name: 'All files', extensions: ['*'] }] });
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: `Add files to ${slot.title}`,
+        filters: [{ name: 'Documents and notes', extensions: ['pdf', 'docx', 'md', 'txt', 'html', 'ipynb', 'py', 'sql', 'json', 'csv'] }, { name: 'All files', extensions: ['*'] }] });
       if (r.canceled || !r.filePaths.length) return null;
       paths = r.filePaths;
     }
-    const out = await addFiles(paths.filter(p => typeof p === 'string' && p));
-    if (!out.added.length && out.skipped.length) throw new Error(`Could not read ${out.skipped.join(', ')}. Use Markdown, text, PDF or Word files.`);
+    const out = await addToSlot(slot, paths.filter(p => typeof p === 'string' && p));
+    if (!out.added.length && !out.folders.length && out.skipped.length) throw new Error(`Could not read ${out.skipped.join(', ')}. Use PDF, Word, Markdown or text files.`);
     return out;
   });
-  // Notes written in the app are saved among its own files, named by the title given.
-  const noteFile = (name) => {
-    const clean = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'Note';
-    return /\.(md|txt)$/i.test(clean) ? clean : clean + '.md';
-  };
-  // What is already saved under a name, so the note can be edited rather than pasted again.
-  handle('kb:noteInfo', (name) => {
-    const file = noteFile(name);
-    const full = path.join(myFilesDir(), file);
-    const info = { file, exists: false, text: '', always: isPinnedName(file), alwaysByName: isPinnedName(file) };
-    if (fs.existsSync(full)) {
-      const { meta, body } = frontMatter(fs.readFileSync(full, 'utf8'));
-      info.exists = true; info.text = body.trim();
-      info.always = info.alwaysByName || /^(true|yes|1)$/i.test(meta.pinned || '');
-    }
-    return info;
+  handle('slot:removeFile', async (id, name) => {
+    const slot = slotById(id);
+    if (!slot) throw new Error('Unknown section.');
+    const safe = path.basename(String(name || ''));
+    if (!safe || safe === NOTE) throw new Error('Nothing to remove.');
+    fs.rmSync(path.join(slotDir(slot), safe), { force: true }); // the app's copy; the original file is untouched
+    await syncMine();
+    return slotInfo(slot);
   });
-  // always: send this note with every answer (instructions, about me) instead of searching it.
-  handle('kb:addText', async ({ name, text, always } = {}) => {
-    const body = String(text || '').trim();
-    if (!body) throw new Error('Write or paste some text first.');
-    // Same ceiling as any other note file, so everything that is saved is also searched.
-    if (Buffer.byteLength(body) > 380000) throw new Error('That is more than one note can hold (about 60,000 words). Split it into two notes.');
-    const file = noteFile(name);
-    const dir = myFilesDir();
-    fs.mkdirSync(dir, { recursive: true });
-    const replaced = fs.existsSync(path.join(dir, file));
-    const pin = always && !isPinnedName(file) ? '---\npinned: true\n---\n' : '';
-    fs.writeFileSync(path.join(dir, file), pin + body + '\n');
-    const added = await syncOrigin({ kind: 'folder', spec: dir });
-    return { file, replaced, always: !!always || isPinnedName(file), added };
+  // Everything the answers can draw on: what is sent every time, and every searchable file.
+  handle('kb:inventory', () => {
+    const lean = config.get().answerContext === 'lean';
+    const always = planPinned(kb.pinned(), lean ? { total: 6000, perNote: 2500 } : undefined)
+      .map(n => ({ title: n.title, path: n.path, slot: n.slot || '', sourceId: n.sourceId, chars: n.chars || n.text.length, sent: n.sent }));
+    return { always, searched: kb.inventory(), passages: kb.chunks.length, lean };
+  });
+  handle('kb:fileText', ({ sourceId, path: filePath } = {}) => {
+    const text = kb.fileText(String(sourceId), String(filePath));
+    return { text: text.slice(0, 8000), more: Math.max(0, text.length - 8000) };
   });
   handle('kb:openFolder', (id) => {
     const src = kb.sources[id];
     if (src && src.origin && src.origin.kind === 'folder') shell.openPath(src.origin.spec);
     return true;
   });
-  handle('kb:remove', async (id) => {
+  handle('kb:remove', (id) => {
     const src = kb.sources[id];
-    if (src && src.origin && src.origin.spec === myFilesDir()) {
-      // These are the app's own copies, so removing the source deletes them. The originals are untouched.
-      const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Remove', 'Cancel'], defaultId: 1, cancelId: 1,
-        message: 'Remove the files you added to the app?', detail: 'The copies kept by the app are deleted. Your original files stay where they are.' });
-      if (r.response !== 0) return kb.stats();
-      fs.rmSync(myFilesDir(), { recursive: true, force: true });
-    }
-    kb.removeSource(id); kb.save(); return kb.stats();
+    if (src && src.origin && src.origin.spec === myFilesDir()) throw new Error('Remove your own notes and files from their section.');
+    kb.removeSource(id); kb.save(); return publicStats();
   });
   handle('kb:sync', async (id) => {
     const all = Object.values(kb.sources);
@@ -400,7 +448,7 @@ function wireIpc() {
       try { await syncOrigin(origin); } catch (e) { failures.push(`${origin.spec}: ${e.message}`); }
     }
     if (failures.length) throw new Error(failures.join(' '));
-    return kb.stats();
+    return publicStats();
   });
   handle('kb:search', (q) => kb.search(q, 5).map(h => ({ title: h.title, path: h.path, url: h.url, snippet: h.text.slice(0, 320) })));
 
@@ -465,11 +513,27 @@ function wireIpc() {
   });
 
   handle('win:minimize', () => win.minimize());
-  handle('win:maximize', () => { if (win.isMaximized()) win.unmaximize(); else win.maximize(); return win.isMaximized(); });
+  // Maximise, or restore down. The bounds from before are kept here as well, because a
+  // frameless window does not always report or restore its own state reliably.
+  handle('win:maximize', () => {
+    if (win.isMaximized() || maxRestore) {
+      const back = maxRestore; maxRestore = null;
+      if (win.isMaximized()) win.unmaximize();
+      if (back) setTimeout(() => { if (win && !win.isDestroyed() && !win.isMaximized()) win.setBounds(back); }, 60);
+      send('window', { maximized: false });
+      return false;
+    }
+    maxRestore = win.getBounds();
+    win.maximize();
+    send('window', { maximized: true });
+    return true;
+  });
+  handle('win:onTop', (on) => { config.update({ ui: { onTop: !!on } }); applyOnTop(); return config.get().ui.onTop; });
   handle('win:close', () => win.close());
   handle('win:compact', (on) => {
     if (on && !compactRestore) {
       if (win.isMaximized()) win.unmaximize();
+      if (maxRestore) { win.setBounds(maxRestore); maxRestore = null; send('window', { maximized: false }); }
       compactRestore = win.getBounds();
       win.setBounds({ ...compactRestore, height: 260 });
     } else if (!on && compactRestore) {
@@ -515,10 +579,13 @@ app.whenReady().then(() => {
   wireIpc();
   createWindow();
 
-  // One-time move of the old Settings boxes ("About you", "This meeting") into the notes.
+  // Bring notes from earlier versions into the sections: the old Settings boxes first, then
+  // loose files, then read the app's own files again so the sections take effect.
   try {
-    if (moveSettingsTextToNotes(config, myFilesDir()).length) syncOrigin({ kind: 'folder', spec: myFilesDir() }, { quiet: true }).catch(() => {});
-  } catch { /* the text stays in the config file and is tried again next launch */ }
+    moveSettingsTextToNotes(config, myFilesDir());
+    moveLooseFilesIntoSections(myFilesDir());
+    syncMine().catch(() => {});
+  } catch { /* tried again next launch */ }
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();
@@ -529,7 +596,7 @@ app.whenReady().then(() => {
   const failed = registerShortcuts();
   if (failed.length) win.webContents.once('did-finish-load', () => send('notice', { level: 'error', message: shortcutFailure(failed) }));
 
-  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, background, globalShortcut, runShortcut, addFiles });
+  if (process.env.MC_E2E) require(path.resolve(process.env.MC_E2E))({ app, win, copilot, kb, config, syncOrigin, autoSync, checkForUpdate, background, globalShortcut, runShortcut, slotInfo, publicStats });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (ocr) ocr.stop(); });

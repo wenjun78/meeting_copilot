@@ -9,6 +9,7 @@ const DEFAULTS = {
   autoUpdate: true,                   // download and install new versions of the app
   autoSync: true,                     // re-read sources in the background when they change
   answerLength: 'short',              // 'short' | 'detailed'
+  answerContext: 'full',              // 'full' | 'lean' (less sent per answer, for services with tight token limits)
   llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-5.6-sol', extra: { reasoning_effort: 'low' } },
   stt: { baseUrl: '', apiKey: '', model: 'gpt-4o-transcribe', language: '', vocabulary: '' },
   embed: { baseUrl: '', apiKey: '', model: '' },
@@ -16,7 +17,7 @@ const DEFAULTS = {
   api: { searchUrl: '', headerName: 'Authorization', headerValue: '' },
   capture: { micDeviceId: '', themSource: 'system', ocrIntervalSec: 4, ocrLangs: 'eng' },
   shortcuts: { ...SHORTCUTS },         // '' turns one off
-  ui: { opacity: 1, bounds: null },
+  ui: { opacity: 1, bounds: null, onTop: true },
 };
 
 const SECRET_PATHS = [['llm', 'apiKey'], ['stt', 'apiKey'], ['embed', 'apiKey'], ['github', 'token'], ['api', 'headerValue']];

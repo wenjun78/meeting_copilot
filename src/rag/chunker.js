@@ -151,10 +151,13 @@ function frontMatter(text) {
 const PINNED_NAME = /(^|[\s_.()\[\]-])(about[\s_-]?me|bio|jd|job[\s_-]?descriptions?|instructions?|agenda|brief(ing)?)($|[\s_.()\[\]-])/i;
 const isPinnedName = (fileName) => PINNED_NAME.test(String(fileName).split('/').pop().replace(/\.[^.]+$/, ''));
 
-// -> { chunks: [{title, text, line?}], pinned: null | {title, text} }
-function readNote(path, raw) {
+// -> { chunks: [{title, text, line?}], pinned: null | {title, text, chars} }
+// opts.pin forces the note to be (or not be) sent with every answer; left out, the front
+// matter and the file name decide. opts.name replaces the file name in passage titles and
+// opts.title is the heading the note is given when it is sent.
+function readNote(path, raw, opts = {}) {
   const ext = extOf(path);
-  const name = path.split('/').pop();
+  const name = opts.name || path.split('/').pop();
   let text = raw;
   let prose = PROSE_EXT.has(ext);
   let meta = {};
@@ -164,8 +167,9 @@ function readNote(path, raw) {
   if (!text || !text.trim()) return { chunks: [], pinned: null };
   const pieces = prose ? chunkProse(text) : chunkCode(text);
   const chunks = pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
-  const pin = prose && (/^(true|yes|1)$/i.test(meta.pinned || '') || isPinnedName(name));
-  return { chunks, pinned: pin ? { title: meta.title || name, text: text.trim().slice(0, 6000) } : null };
+  const pin = opts.pin !== undefined ? opts.pin : prose && (/^(true|yes|1)$/i.test(meta.pinned || '') || isPinnedName(path));
+  const full = text.trim();
+  return { chunks, pinned: pin ? { title: opts.title || meta.title || name, text: full.slice(0, 8000), chars: full.length } : null };
 }
 
 const chunkFile = (path, raw) => readNote(path, raw).chunks;
