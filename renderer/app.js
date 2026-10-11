@@ -419,7 +419,8 @@ async function fillDevices() {
 function fillSettings() {
   const c = state.cfg, s = state.saved;
   const keyHint = (has) => (has ? 'Saved. Type to replace.' : '');
-  $('s-llm-base').value = c.llm.baseUrl; $('s-llm-model').value = c.llm.model; $('s-llm-key').placeholder = keyHint(s.llmKey) || 'gsk_...';
+  $('s-llm-base').value = c.llm.baseUrl; $('s-llm-model').value = c.llm.model; $('s-llm-key').placeholder = keyHint(s.llmKey) || 'Paste your API key';
+  $('s-service').value = serviceOf(c.llm.baseUrl); showService();
   $('s-llm-extra').value = JSON.stringify(c.llm.extra || {});
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = c.stt.language; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
@@ -446,6 +447,23 @@ $('updateCheck').addEventListener('click', async () => {
             : r.state === 'downloading' ? `Version ${r.version} is being downloaded.`
               : `Version ${r.version} is available. It downloads once you are not in a meeting.`;
   } catch (e) { $('versionNote').textContent = ''; fail(e); }
+});
+
+// Picking a service fills in its address and sensible models, so only the key is left to paste.
+const SERVICES = {
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' } },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' } },
+};
+const serviceOf = (baseUrl) => (/api\.openai\.com/i.test(baseUrl) ? 'openai' : /api\.groq\.com/i.test(baseUrl) ? 'groq' : 'custom');
+function showService() { $('s-llm-base-row').hidden = $('s-service').value !== 'custom'; }
+$('s-service').addEventListener('change', () => {
+  const svc = SERVICES[$('s-service').value];
+  if (svc) {
+    $('s-llm-base').value = svc.baseUrl; $('s-llm-model').value = svc.model; $('s-stt-model').value = svc.stt;
+    $('s-llm-extra').value = JSON.stringify(svc.extra);
+    $('s-llm-key').placeholder = 'Paste the key for this service'; // the saved key belongs to the previous service
+  }
+  showService();
 });
 
 // Shortcut fields record the keys pressed in them instead of taking typed text.

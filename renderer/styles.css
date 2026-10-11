@@ -168,6 +168,10 @@ input.keys:focus { border-color: var(--them); }
 .kb-hits b { display: block; font-weight: 600; margin-bottom: 2px; }
 .kb-hits span { color: var(--muted); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
+details.more { border-top: 1px solid var(--rule); padding-top: 10px; }
+details.more > summary { cursor: pointer; color: var(--muted); font-weight: 600; padding-bottom: 6px; }
+details.more > summary:hover, details.more[open] > summary { color: var(--text); }
+details.more fieldset:first-of-type { border-top: 0; padding-top: 4px; }
 fieldset { border: 0; border-top: 1px solid var(--rule); margin: 0; padding: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; }
 fieldset:first-of-type { border-top: 0; padding-top: 0; }
 legend { padding: 0 8px 0 0; font-weight: 600; float: left; width: 100%; margin-bottom: 2px; }

@@ -201,7 +201,9 @@ test('config store encrypts secrets at rest and keeps free-form extra params', (
   assert.equal(b.llm.apiKey, 'gsk_secret');
   assert.deepEqual(b.llm.extra, {});
   assert.equal(b.github.apiBase, 'https://ghe.example/api/v3');
-  assert.equal(b.stt.model, 'whisper-large-v3');
+  assert.equal(b.stt.model, 'gpt-4o-transcribe');
+  assert.equal(b.llm.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(b.llm.model, 'gpt-5.6-sol');
 });
 
 test('OCR cleanup drops icon noise and keeps real lines', () => {
@@ -531,4 +533,30 @@ test('large exported HTML reports are read: embedded images are dropped, the tex
   assert.ok(text.length < 400, 'no image or script payload in the text');
   assert.equal(chunks[0].title, 'Forecasting.html — Forecasting numeric data', 'a heading wrapped over two lines stays one heading');
   assert.match(text, /Method\nTen-fold cross validation/);
+});
+
+test('a reasoning model that refuses max_tokens, temperature and an unknown extra still answers, keeping the effort setting', async () => {
+  const llm = new LLM(cfgFor({ llm: { baseUrl: srv.base + '/v1', apiKey: 'test-key', model: 'strict-reasoner', extra: { reasoning_effort: 'low', verbosity: 'low' } } }));
+  const before = srv.log.chat.length;
+  const text = await llm.chatStream([{ role: 'user', content: 'hi' }], { maxTokens: 700 });
+  assert.match(text, /two passes/);
+  assert.equal(srv.log.chat.length, before + 4, 'three refusals, then accepted');
+  const sent = srv.log.chat.at(-1);
+  assert.equal(sent.max_completion_tokens, 700);
+  assert.ok(!('max_tokens' in sent) && !('temperature' in sent) && !('verbosity' in sent));
+  assert.equal(sent.reasoning_effort, 'low', 'the accepted extra parameter is kept');
+});
+
+test('the prompt tells the model how to answer what the notes do not cover', async () => {
+  const { co } = scripted();
+  const seen = [];
+  const original = co.llm.chatStream;
+  co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
+  await co.answer({ mode: 'typed', question: 'Where do you see yourself in five years?' });
+  const system = seen[0];
+  assert.match(system, /where do you see yourself in five years/);
+  assert.match(system, /Do not invent events, employers, numbers or credentials/);
+  assert.match(system, /answer only from the notes and references\. If they do not cover it, do not invent it/);
+  assert.match(system, /salary expectation, notice period[^\n]*never state one/);
+  assert.match(system, /General knowledge[^\n]*answer directly/);
 });

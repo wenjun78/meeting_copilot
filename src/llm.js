@@ -96,12 +96,19 @@ class LLM {
       arm();
       let body = { ...payload, ...extra };
       let res = await post(body);
-      for (let attempt = 0; res.status === 400 && attempt < 2; attempt++) {
+      // Services differ in which parameters they accept. When a request is refused for one,
+      // adjust it and try again: OpenAI's reasoning models want max_completion_tokens and no
+      // temperature; other services may not know the extra parameters at all.
+      for (let attempt = 0; res.status === 400 && attempt < 4; attempt++) {
         const why = await res.text();
-        if (/max_tokens/.test(why) && 'max_tokens' in body) { // newer OpenAI models renamed the limit
+        const extras = Object.keys(extra).filter(k => k in body);
+        if ('max_tokens' in body && /max_tokens/.test(why)) {
           const { max_tokens: limit, ...rest } = body; body = { ...rest, max_completion_tokens: limit };
-        } else if (Object.keys(extra).some(k => k in body)) { // provider rejected the extra params
-          body = { ...payload, ...('max_completion_tokens' in body ? { max_tokens: undefined, max_completion_tokens: maxTokens } : {}) };
+        } else if ('temperature' in body && /temperature/.test(why)) {
+          const { temperature: _dropped, ...rest } = body; body = rest;
+        } else if (extras.length) {
+          const named = extras.filter(k => why.includes(k));
+          body = { ...body }; for (const k of (named.length ? named : extras)) delete body[k];
         } else throw new Error(friendlyError(400, why, 'Answer'));
         arm();
         res = await post(body);

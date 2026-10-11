@@ -40,9 +40,9 @@ npm start
 
 ## First run
 
-1. **Settings**: paste an API key. The defaults point at Groq
-   (`whisper-large-v3` for speech, `openai/gpt-oss-120b` for answers); any
-   OpenAI-compatible service works by changing the base URL and model names.
+1. **Settings**: choose the service (OpenAI by default, with `gpt-5.6-sol`
+   for answers and `gpt-4o-transcribe` for speech; Groq is one click away,
+   and any OpenAI-compatible service works) and paste its API key.
    Fill in "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
    user owns), a GitHub URL, a folder, or a URL that returns a document or JSON.
