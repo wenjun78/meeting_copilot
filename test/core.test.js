@@ -229,7 +229,7 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   assert.equal(src[0].title, 'SLA policy', 'live API result comes first');
   assert.ok(src.some(s => /README\.md/.test(s.title) && /Jaro-Winkler/.test(s.snippet)));
   const prompt = srv.log.chat.at(-1).messages[1].content;
-  assert.match(prompt, /About me:\nData engineer\./);
+  assert.match(prompt, /Pinned notes from my sources[^\n]*\n### (About Alex|_jd\.md)/, 'pinned notes from the repo ride along');
   assert.match(prompt, /Them: How do you handle duplicate customer records\?/);
   assert.match(prompt, /Slide 4: Data quality KPIs/);
   assert.match(prompt, /\[2\] README\.md/);
@@ -464,33 +464,33 @@ test('re-syncing a source keeps the embeddings of passages that did not change',
 
 test('a pinned job description reaches the model with a guard against claiming its requirements', async () => {
   const { co, chats } = scripted();
-  co.getConfig().profile = 'Data engineer, five years of SQL and Python.';
-  co.kb.setSource({ id: 'folder:x', label: 'My files', files: 1, chunks: [{ path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer.' }],
-    pinned: [{ path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.' }] });
+  co.kb.setSource({ id: 'folder:x', label: 'My files', files: 2, chunks: [{ path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer.' }],
+    pinned: [{ path: 'my-files/About me.md', url: '', title: 'About me.md', text: 'Data engineer, five years of SQL and Python.' },
+      { path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.' }] });
   const seen = [];
   const original = co.llm.chatStream;
   co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
   await co.answer({ mode: 'typed', question: 'Tell me about your experience with model serving.' });
-  assert.match(chats[0], /About me:\nData engineer, five years of SQL and Python\./);
-  assert.match(chats[0], /Pinned notes from my sources[^\n]*\n### JD\.md \(my-files\/JD\.md\)\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.match(chats[0], /Pinned notes from my sources[^\n]*\n### About me\.md \(my-files\/About me\.md\)\nData engineer, five years of SQL and Python\./);
+  assert.match(chats[0], /### JD\.md \(my-files\/JD\.md\)\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.ok(!/^About me:/m.test(chats[0]), 'no separate profile section any more');
   assert.match(seen[0], /never present one of its requirements as the user's experience/);
 });
 
-test('text from the old Settings meeting box is moved into the notes once', () => {
-  const { moveMeetingBoxToNotes } = require('../src/migrate');
+test('text from the old Settings boxes is moved into notes once, and both are sent with every answer', () => {
+  const { moveSettingsTextToNotes } = require('../src/migrate');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ profile: 'Data engineer in KL.', context: 'Role: Data Engineer. Must have SQL.', autoAnswer: 'off' }));
   const config = new ConfigStore(path.join(dir, 'config.json'));
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ profile: 'Me.', context: 'Role: Data Engineer. Must have SQL.' }));
   config.load();
   const notes = path.join(dir, 'my-files');
-  const file = moveMeetingBoxToNotes(config, notes);
-  assert.equal(path.basename(file), 'Meeting brief.md');
-  assert.equal(fs.readFileSync(file, 'utf8'), 'Role: Data Engineer. Must have SQL.\n');
-  assert.ok(readNote('Meeting brief.md', fs.readFileSync(file, 'utf8')).pinned, 'the note is sent with every answer');
-  assert.equal(new ConfigStore(path.join(dir, 'config.json')).load().context, '');
-  assert.equal(moveMeetingBoxToNotes(config, notes), '', 'nothing to move the second time');
-  assert.deepEqual(fs.readdirSync(notes), ['Meeting brief.md']);
-  assert.equal(config.get().profile, 'Me.');
+  assert.deepEqual(moveSettingsTextToNotes(config, notes).map(f => path.basename(f)), ['About me.md', 'Meeting brief.md']);
+  assert.equal(fs.readFileSync(path.join(notes, 'About me.md'), 'utf8'), 'Data engineer in KL.\n');
+  for (const f of ['About me.md', 'Meeting brief.md']) assert.ok(readNote(f, fs.readFileSync(path.join(notes, f), 'utf8')).pinned, f);
+  const reloaded = new ConfigStore(path.join(dir, 'config.json')).load();
+  assert.equal(reloaded.profile, ''); assert.equal(reloaded.context, ''); assert.equal(reloaded.autoAnswer, 'off');
+  assert.deepEqual(moveSettingsTextToNotes(config, notes), [], 'nothing to move the second time');
+  assert.deepEqual(fs.readdirSync(notes).sort(), ['About me.md', 'Meeting brief.md']);
 });
 
 test('front matter is stripped, and pinned notes are picked up by flag or by file name', () => {
@@ -499,8 +499,8 @@ test('front matter is stripped, and pinned notes are picked up by flag or by fil
   assert.ok(!about.chunks.some(c => /pinned: true|title: About/.test(c.text)), 'front matter is not indexed as content');
   assert.equal(readNote('notes/skills.md', '---\ntitle: Skills\n---\nPython.').pinned, null);
   for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf', 'JD - Data Engineer.pdf', 'Lenovo_JD.docx',
-    'job description (final).md', 'interview instructions.md', 'agenda.txt', 'client-brief.md']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
-  for (const name of ['jdbc.md', 'cv.md', 'jd.py', 'briefcase.md', 'reinstructions.md', 'projects.md']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
+    'job description (final).md', 'interview instructions.md', 'agenda.txt', 'client-brief.md', 'About me.md', 'about_me.txt', 'bio.md']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
+  for (const name of ['jdbc.md', 'cv.md', 'jd.py', 'briefcase.md', 'reinstructions.md', 'projects.md', 'biology.md', 'about meetings.md']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
   assert.equal(readNote('a.md', 'No front matter here.\n---\nnot: meta').pinned, null);
 });
 

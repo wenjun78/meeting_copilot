@@ -81,7 +81,7 @@ function renderIdle() {
     el('strong', { text: state.listening ? 'Listening. Answers appear here when they ask something.' : 'Answers appear here during your call.' }),
     el('ol', {},
       el('li', { class: hasKey ? 'done' : '', text: 'Add your API key under Settings.' }),
-      el('li', { class: hasKb ? 'done' : '', text: 'Add your CV, notes or repositories under Knowledge.' }),
+      el('li', { class: hasKb ? 'done' : '', text: 'Add who you are, your CV and your repositories under Knowledge.' }),
       el('li', { class: state.listening ? 'done' : '', text: 'Start listening when the meeting begins.' })));
   $('asked').hidden = true; $('sources').hidden = true; $('copy').hidden = true;
 }
@@ -300,8 +300,8 @@ function renderKb(stats) {
     s.pinned && s.pinned.length ? el('span', { class: 'meta pin', text: `Always included: ${s.pinned.join(', ')}` }) : null)));
   const pins = stats.sources.flatMap(x => x.pinned || []);
   $('contextPins').textContent = pins.length
-    ? `Sent with every answer: ${pins.map(p => p.split('/').pop()).join(', ')}. Everything else is searched when a question relates to it.`
-    : 'A note or file with JD, job description, instructions, agenda or brief in its name is sent with every answer. Everything else is searched when a question relates to it.';
+    ? `Sent with every answer: ${pins.map(p => p.split('/').pop().replace(/\.md$/, '')).join(', ')}. Everything else is searched when a question relates to it.`
+    : 'Start with "Write a note" > About me. Notes you mark are sent with every answer; everything else is searched when a question relates to it.';
   $('kbStatus').textContent = stats.chunks ? `${stats.chunks} passages${stats.embedded ? `, ${stats.embedded} with embeddings` : ''}` : '';
   if (state.answer.status === 'idle') renderIdle();
 }
@@ -332,20 +332,45 @@ const filesMessage = (r) => {
   return parts.join('. ');
 };
 $('kbFiles').addEventListener('click', () => kbRun(() => call('kb:addFiles', null), filesMessage));
+// The note form: write or paste a note, choose whether it rides along with every answer or
+// is searched like the rest. Picking a name that already exists loads it for editing.
+const note = { byName: false };
+function noteHint() {
+  const on = $('kbPasteAlways').checked;
+  $('kbPasteHint').textContent = note.byName ? 'A note with this name is always sent with every answer (the first 6,000 characters).'
+    : on ? 'Sent with every answer (the first 6,000 characters). For instructions, the job description, who you are.'
+      : 'Searched when a question relates to it. For a CV, project notes, anything long.';
+}
+async function loadNote(name, always) {
+  $('kbPasteName').value = name;
+  for (const c of document.querySelectorAll('.chip')) c.setAttribute('aria-pressed', String(c.dataset.note === name));
+  let info = { exists: false, alwaysByName: false };
+  try { info = await call('kb:noteInfo', name); } catch { /* treat as a new note */ }
+  note.byName = !!info.alwaysByName;
+  if (info.exists) $('kbPasteText').value = info.text;
+  $('kbPasteAlways').checked = info.exists ? info.always : (note.byName || always);
+  $('kbPasteAlways').disabled = note.byName;
+  noteHint();
+  $('kbPasteText').focus();
+}
 function showPaste(on) {
   $('kbPasteForm').hidden = !on;
   $('kbPaste').setAttribute('aria-expanded', String(on));
-  if (on) $('kbPasteName').focus();
+  if (on) { noteHint(); $('kbPasteName').focus(); }
 }
 $('kbPaste').addEventListener('click', () => showPaste($('kbPasteForm').hidden));
 $('kbPasteCancel').addEventListener('click', () => showPaste(false));
+for (const c of document.querySelectorAll('.chip')) c.addEventListener('click', () => loadNote(c.dataset.note, c.dataset.always === '1'));
+$('kbPasteName').addEventListener('change', () => { const n = $('kbPasteName').value.trim(); if (n) loadNote(n, $('kbPasteAlways').checked); });
+$('kbPasteAlways').addEventListener('change', noteHint);
 $('kbPasteForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const name = $('kbPasteName').value.trim(), text = $('kbPasteText').value;
-  if (!text.trim()) { $('kbPasteText').focus(); return toast('Paste some text first.', 'error'); }
-  kbRun(() => call('kb:addText', { name, text }), (r) => {
+  if (!text.trim()) { $('kbPasteText').focus(); return toast('Write or paste some text first.', 'error'); }
+  kbRun(() => call('kb:addText', { name, text, always: $('kbPasteAlways').checked }), (r) => {
     $('kbPasteName').value = ''; $('kbPasteText').value = ''; showPaste(false);
-    return `${r.replaced ? 'Updated' : 'Saved'} "${r.file}" in My files`;
+    for (const c of document.querySelectorAll('.chip')) c.setAttribute('aria-pressed', 'false');
+    return `${r.replaced ? 'Updated' : 'Saved'} "${r.file.replace(/\.md$/, '')}": ${r.always ? 'sent with every answer' : 'searched when relevant'}`;
   });
 });
 // Files and folders can also be dropped anywhere on the window.
@@ -398,7 +423,7 @@ function fillSettings() {
   $('s-llm-extra').value = JSON.stringify(c.llm.extra || {});
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = c.stt.language; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
-  $('s-profile').value = c.profile; $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
+  $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;
   $('s-gh-token').placeholder = keyHint(s.githubToken); $('s-gh-api').value = c.github.apiBase;
   $('s-api-url').value = c.api.searchUrl; $('s-api-hname').value = c.api.headerName; $('s-api-hvalue').placeholder = keyHint(s.apiHeader);
@@ -468,7 +493,7 @@ $('settings').addEventListener('submit', async (e) => {
   const v = (id) => $(id).value.trim();
   const patch = {
     autoUpdate: $('s-update').checked,
-    profile: $('s-profile').value, autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value,
+    autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value,
     llm: { baseUrl: v('s-llm-base'), model: v('s-llm-model'), extra },
     stt: { baseUrl: v('s-stt-base'), model: v('s-stt-model'), language: v('s-stt-lang'), vocabulary: v('s-stt-vocab') },
     embed: { baseUrl: v('s-embed-base'), model: v('s-embed-model') },

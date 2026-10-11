@@ -5,7 +5,6 @@ const path = require('path');
 const { DEFAULTS: SHORTCUTS } = require('./shortcuts');
 
 const DEFAULTS = {
-  profile: '',
   autoAnswer: 'questions',            // 'questions' | 'off'
   autoUpdate: true,                   // download and install new versions of the app
   autoSync: true,                     // re-read sources in the background when they change

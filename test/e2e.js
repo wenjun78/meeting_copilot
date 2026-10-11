@@ -28,7 +28,6 @@ function fakeSpeechWav(file) {
   const out = process.env.MC_E2E_OUT || path.join(tmp, 'out');
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
-    profile: 'Data engineer on the customer master data team.',
     llm: { baseUrl: srv.base + '/v1', apiKey: 'test-key', model: 'mock-chat', extra: {} },
     github: { apiBase: srv.base + '/gh' },
   }));

@@ -43,7 +43,7 @@ npm start
 1. **Settings**: paste an API key. The defaults point at Groq
    (`whisper-large-v3` for speech, `openai/gpt-oss-120b` for answers); any
    OpenAI-compatible service works by changing the base URL and model names.
-   Fill in "About you" and "Names and terms to get right".
+   Fill in "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
    user owns), a GitHub URL, a folder, or a URL that returns a document or JSON.
 3. **Start listening** when the call begins and pick the meeting window or the
@@ -115,9 +115,10 @@ duplicates are filtered, but headphones give a cleaner transcript.
   onto the window. Files are copied into the app's own folder, so they keep
   working if the originals move; "Open" on the "My files" row shows that
   folder for editing or deleting.
-- **Pasted text**: "Paste text" in the Knowledge tab saves what you paste
-  (from Word, a web page, an email) as a note in the same place. Give it a
-  name; pasting again under the same name replaces it.
+- **Notes**: "Write a note" in the Knowledge tab saves what you type or paste
+  (from Word, a web page, an email). Tick "Send with every answer" for
+  instructions and who you are; leave it off for long material that should
+  be searched. Choosing a name that exists opens that note for editing.
 
 - **GitHub**: one request downloads the repository; Markdown, notebooks
   (outputs stripped), code, config, **PDF and Word (.docx)** files are split
@@ -152,8 +153,9 @@ Everything you give the app lives in one place, the Knowledge tab. Most of it
 is searched per question. A few notes are instead sent to the model with
 **every** answer, so replies lead with what the role or agenda asks for:
 
-- a note or file whose name contains `jd`, `job description`, `instructions`,
-  `agenda` or `brief` as a word (`JD - Data Engineer.pdf`,
+- a note you ticked "Send with every answer" for when writing it, or
+- a note or file whose name contains `about me`, `bio`, `jd`,
+  `job description`, `instructions`, `agenda` or `brief` as a word (`JD - Data Engineer.pdf`,
   `interview instructions`), or
 - any Markdown note whose first lines are
 
@@ -168,7 +170,8 @@ A job description is treated as what the other side wants, not as your
 experience. Replace the note before each different meeting. The Knowledge
 tab shows which notes are sent with every answer.
 
-Settings keeps only "About you": who you are and how you like to sound.
+Who you are goes here too: "Write a note" > About me. Settings holds only
+how the app runs (keys, models, audio, shortcuts).
 
 **Writing notes.** Markdown works best for a CV and a job description: each
 `##` heading becomes its own searchable passage, a leading `---` block is
@@ -233,3 +236,7 @@ src/shortcuts.js   shortcut defaults and the meeting-app conflict table
 src/rag/           chunking, BM25, GitHub / URL / folder ingestion, index
 renderer/          the window: capture.js (audio, screen), app.js (UI)
 ```
+
+## License
+
+MIT. Copyright © 2026 wjun78.

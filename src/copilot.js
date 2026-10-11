@@ -253,8 +253,8 @@ class Copilot extends EventEmitter {
       '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named, then one or two spoken sentences on how it works, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
       'Grounding:',
       '- The reference material comes from the user\'s own repositories, documents and API. Prefer it over general knowledge and cite it inline as [1], [2].',
-      '- Never invent specifics about the user\'s own work, employer, numbers or history. If the references and profile do not cover something, answer from general knowledge and add a final line starting "Check:" naming what the user should verify before saying it.',
-      '- When the pinned notes include a job description, agenda, brief or instructions for this meeting, shape the answer to them: lead with the experience, facts or skills it asks for, in its vocabulary. A job description describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the profile or references show it. If the user lacks something it asks for, say what is closest and true.',
+      '- Never invent specifics about the user\'s own work, employer, numbers or history. If the pinned notes and references do not cover something, answer from general knowledge and add a final line starting "Check:" naming what the user should verify before saying it.',
+      '- When the pinned notes include a job description, agenda, brief or instructions for this meeting, shape the answer to them: lead with the experience, facts or skills it asks for, in its vocabulary. A job description describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the user\'s own notes or references show it. If the user lacks something it asks for, say what is closest and true.',
       '- The transcript comes from speech recognition and the screen text from OCR; both can contain errors. Read through obvious mis-hearings.',
       '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
     ].join('\n');
@@ -262,7 +262,6 @@ class Copilot extends EventEmitter {
     const convo = this.entries.filter(e => !e.pending).slice(-14)
       .map(e => `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`).join('\n');
     const parts = [];
-    if (cfg.profile && cfg.profile.trim()) parts.push(`About me:\n${cfg.profile.trim().slice(0, 2500)}`);
     // Pinned notes from the sources (a job description file, a short bio) ride along with every answer.
     let room = 9000;
     const notes = [];

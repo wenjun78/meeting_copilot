@@ -147,8 +147,9 @@ function frontMatter(text) {
 
 // A note is pinned (sent to the model with every answer, not only when a search finds it)
 // when its front matter says "pinned: true" or its file name contains one of these as a
-// whole word: jd, job description, instructions, agenda, brief ("JD - Data Engineer.pdf").
-const PINNED_NAME = /(^|[\s_.()\[\]-])(jd|job[\s_-]?descriptions?|instructions?|agenda|brief(ing)?)($|[\s_.()\[\]-])/i;
+// whole word: about me, bio, jd, job description, instructions, agenda, brief.
+const PINNED_NAME = /(^|[\s_.()\[\]-])(about[\s_-]?me|bio|jd|job[\s_-]?descriptions?|instructions?|agenda|brief(ing)?)($|[\s_.()\[\]-])/i;
+const isPinnedName = (fileName) => PINNED_NAME.test(String(fileName).split('/').pop().replace(/\.[^.]+$/, ''));
 
 // -> { chunks: [{title, text, line?}], pinned: null | {title, text} }
 function readNote(path, raw) {
@@ -163,11 +164,10 @@ function readNote(path, raw) {
   if (!text || !text.trim()) return { chunks: [], pinned: null };
   const pieces = prose ? chunkProse(text) : chunkCode(text);
   const chunks = pieces.map(p => ({ title: p.heading ? `${name} — ${p.heading}` : name, text: p.text, line: p.line }));
-  const stem = name.replace(/\.[^.]+$/, '');
-  const pin = prose && (/^(true|yes|1)$/i.test(meta.pinned || '') || PINNED_NAME.test(stem));
+  const pin = prose && (/^(true|yes|1)$/i.test(meta.pinned || '') || isPinnedName(name));
   return { chunks, pinned: pin ? { title: meta.title || name, text: text.trim().slice(0, 6000) } : null };
 }
 
 const chunkFile = (path, raw) => readNote(path, raw).chunks;
 
-module.exports = { chunkFile, readNote, frontMatter, chunkProse, chunkCode, isIndexable, htmlToText, notebookToText, extOf };
+module.exports = { chunkFile, readNote, frontMatter, isPinnedName, chunkProse, chunkCode, isIndexable, htmlToText, notebookToText, extOf };
