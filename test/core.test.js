@@ -462,21 +462,35 @@ test('re-syncing a source keeps the embeddings of passages that did not change',
   assert.equal(kb.sources.s.version, 'v2');
 });
 
-test('the job description or brief for the meeting is always given to the model, with a guard against claiming it', async () => {
+test('a pinned job description reaches the model with a guard against claiming its requirements', async () => {
   const { co, chats } = scripted();
-  const cfg = co.getConfig();
-  cfg.profile = 'Data engineer, five years of SQL and Python.';
-  cfg.context = 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.';
+  co.getConfig().profile = 'Data engineer, five years of SQL and Python.';
+  co.kb.setSource({ id: 'folder:x', label: 'My files', files: 1, chunks: [{ path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer.' }],
+    pinned: [{ path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.' }] });
   const seen = [];
   const original = co.llm.chatStream;
   co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
   await co.answer({ mode: 'typed', question: 'Tell me about your experience with model serving.' });
   assert.match(chats[0], /About me:\nData engineer, five years of SQL and Python\./);
-  assert.match(chats[0], /About this meeting \(job description, agenda or brief I was given\):\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.match(chats[0], /Pinned notes from my sources[^\n]*\n### JD\.md \(my-files\/JD\.md\)\nSenior ML Engineer\. Must have: Kubernetes/);
   assert.match(seen[0], /never present one of its requirements as the user's experience/);
-  cfg.context = '';
-  await co.answer({ mode: 'typed', question: 'And monitoring?' });
-  assert.ok(!/About this meeting/.test(chats[1]));
+});
+
+test('text from the old Settings meeting box is moved into the notes once', () => {
+  const { moveMeetingBoxToNotes } = require('../src/migrate');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
+  const config = new ConfigStore(path.join(dir, 'config.json'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ profile: 'Me.', context: 'Role: Data Engineer. Must have SQL.' }));
+  config.load();
+  const notes = path.join(dir, 'my-files');
+  const file = moveMeetingBoxToNotes(config, notes);
+  assert.equal(path.basename(file), 'Meeting brief.md');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'Role: Data Engineer. Must have SQL.\n');
+  assert.ok(readNote('Meeting brief.md', fs.readFileSync(file, 'utf8')).pinned, 'the note is sent with every answer');
+  assert.equal(new ConfigStore(path.join(dir, 'config.json')).load().context, '');
+  assert.equal(moveMeetingBoxToNotes(config, notes), '', 'nothing to move the second time');
+  assert.deepEqual(fs.readdirSync(notes), ['Meeting brief.md']);
+  assert.equal(config.get().profile, 'Me.');
 });
 
 test('front matter is stripped, and pinned notes are picked up by flag or by file name', () => {

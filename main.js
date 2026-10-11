@@ -14,6 +14,7 @@ const { ingestFolder } = require('./src/rag/local');
 const { extractText } = require('./src/rag/extract');
 const { isIndexable } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
+const { moveMeetingBoxToNotes } = require('./src/migrate');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
 if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
@@ -309,18 +310,6 @@ function wireIpc() {
   handle('shortcuts:suspend', (on) => { if (on) globalShortcut.unregisterAll(); else registerShortcuts(); return true; });
   handle('shortcuts:check', (accel) => ({ label: shortcuts.pretty(accel), problem: shortcuts.problem(accel) }));
 
-  // Reads a job description, agenda or brief from a file into the "This meeting" box.
-  handle('context:loadFile', async () => {
-    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: 'Load a job description, agenda or brief',
-      filters: [{ name: 'Documents', extensions: ['pdf', 'docx', 'txt', 'md', 'html'] }] });
-    if (r.canceled || !r.filePaths[0]) return null;
-    const file = r.filePaths[0];
-    if (fs.statSync(file).size > 25_000_000) throw new Error('That file is too large to read.');
-    const text = (await extractText(file.split(path.sep).join('/'), fs.readFileSync(file))).trim();
-    if (!text) throw new Error('No text could be read from that file. A scanned PDF has no text; paste the content instead.');
-    return { name: path.basename(file), text: text.slice(0, 7000), truncated: text.length > 7000 };
-  });
-
   handle('update:check', () => checkForUpdate({ manual: true }));
   handle('kb:stats', () => kb.stats());
   handle('kb:add', async (text) => {
@@ -360,7 +349,8 @@ function wireIpc() {
   handle('kb:addText', async ({ name, text } = {}) => {
     const body = String(text || '').trim();
     if (!body) throw new Error('Paste some text first.');
-    if (body.length > 600000) throw new Error('That is too much text for one note. Split it into a few notes.');
+    // Same ceiling as any other note file, so everything that is saved is also searched.
+    if (Buffer.byteLength(body) > 380000) throw new Error('That is more than one note can hold (about 60,000 words). Split it into two notes.');
     const clean = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'Pasted note';
     const file = /\.(md|txt)$/i.test(clean) ? clean : clean + '.md';
     const dir = myFilesDir();
@@ -507,6 +497,11 @@ app.whenReady().then(() => {
 
   wireIpc();
   createWindow();
+
+  // One-time move of the old Settings "This meeting" text into the notes.
+  try {
+    if (moveMeetingBoxToNotes(config, myFilesDir())) syncOrigin({ kind: 'folder', spec: myFilesDir() }, { quiet: true }).catch(() => {});
+  } catch { /* the text stays in the config file and is tried again next launch */ }
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();
