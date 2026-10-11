@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('crypto');
-const { chunkFile, chunkProse, htmlToText } = require('./chunker');
-const { extractText } = require('./extract');
+const { chunkFile, readNote, chunkProse, htmlToText } = require('./chunker');
+const { extractDoc } = require('./extract');
 
 const TEXT_KEYS = ['text', 'content', 'body', 'answer', 'snippet', 'description', 'summary', 'markdown', 'page_content', 'chunk'];
 const TITLE_KEYS = ['title', 'name', 'question', 'heading', 'subject', 'id', 'key'];
@@ -76,7 +76,8 @@ async function ingestUrl(url, { auth, fetchFn = fetch, timeoutMs = 30000 } = {})
   const docKind = type.includes('pdf') || /\.pdf($|[?#])/i.test(url) ? 'pdf' : type.includes('wordprocessingml') || /\.docx($|[?#])/i.test(url) ? 'docx' : '';
   if (docKind) {
     const name = decodeURIComponent(new URL(url).pathname.split('/').pop() || host).replace(/\.(pdf|docx)$/i, '') + '.' + docKind;
-    for (const c of chunkFile(name, await extractText(name, bytes))) chunks.push({ path: host, url, title: c.title, text: c.text });
+    const doc = await extractDoc(name, bytes);
+    for (const c of readNote(name, doc.text, { name: doc.name, pin: false }).chunks) chunks.push({ path: host, url, title: c.title, text: c.text });
     return { id: `api:${url}`, label: url.replace(/^https?:\/\//, ''), url, version, chunks, files: 1, skipped: 0 };
   }
   const parsed = parseBody(type, body);

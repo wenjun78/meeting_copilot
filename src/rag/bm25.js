@@ -8,10 +8,16 @@ class BM25 {
     this.n = docs.length;
     this.len = new Float32Array(this.n);
     this.postings = new Map(); // term -> [docIdx, tf, docIdx, tf, ...]
+    this.inTitle = new Map();  // term -> [docIdx, ...] for terms in the passage's title
     let total = 0;
     for (let i = 0; i < this.n; i++) {
       const d = docs[i];
       // Title and path are repeated so a hit there outweighs a body mention.
+      for (const t of new Set(tokenize(d.title || ''))) {
+        let p = this.inTitle.get(t);
+        if (!p) this.inTitle.set(t, (p = []));
+        p.push(i);
+      }
       const toks = tokenize(`${d.title || ''} ${d.title || ''} ${d.path || ''} ${d.text}`);
       this.len[i] = toks.length; total += toks.length;
       const tf = new Map();
@@ -40,6 +46,8 @@ class BM25 {
         const s = idf * (f * (this.k1 + 1)) / (f + this.k1 * (1 - this.b + this.b * this.len[i] / this.avg));
         scores.set(i, (scores.get(i) || 0) + s);
       }
+      // A query word in the title says the whole passage is about it, however long the passage is.
+      for (const i of this.inTitle.get(t) || []) scores.set(i, (scores.get(i) || 0) + idf * 1.5);
     }
     return [...scores].sort((a, b) => b[1] - a[1]).slice(0, k).map(([index, score]) => ({ index, score }));
   }

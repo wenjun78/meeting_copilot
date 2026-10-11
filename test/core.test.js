@@ -17,6 +17,7 @@ const { ConfigStore } = require('../src/config');
 const { SLOTS, NOTE, planPinned, moveLooseFilesIntoSections } = require('../src/slots');
 const { Copilot } = require('../src/copilot');
 const { cleanOcrText } = require('../src/ocr');
+const { describe: describeDoc } = require('../src/rag/extract');
 const shortcuts = require('../src/shortcuts');
 
 let srv;
@@ -709,4 +710,33 @@ test('a whole interview of earlier questions stays in view, the latest in most d
   assert.ok(prompt.indexOf('Question number 1 about') < prompt.indexOf('Question number 25 about'), 'oldest first');
   const cut = (n) => new RegExp(`Asked: Question number ${n} about my background\\?\\nSuggested: ([^\\n]*)`).exec(prompt)[1].length;
   assert.ok(cut(25) > 600 && cut(3) <= 250, 'recent answers are kept longer than old ones');
+});
+
+test('a paper saved under a meaningless file name is read, named by its title and found as "my publication"', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-'));
+  fs.mkdirSync(path.join(dir, 'portfolio'));
+  const file = '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf';
+  fs.copyFileSync(path.join(__dirname, 'fixtures', file), path.join(dir, 'portfolio', file));
+  fs.writeFileSync(path.join(dir, 'portfolio', 'scan.pdf'), '%PDF-1.4 not really a pdf');
+  const mine = await ingestFolder(dir, { sections: true });
+  assert.equal(mine.files, 1, 'the unreadable PDF gives no passages');
+  assert.ok(mine.chunks.length >= 3);
+  assert.ok(mine.chunks.every(c => c.title.startsWith('Publication (research paper): Predicting shipment delays with gradient boosting: an explainable approach (3c1d9a7e')), mine.chunks[0].title);
+
+  // Beside a large repository, a question about "my publication" still lands on the paper.
+  const kb = new KnowledgeBase(null);
+  kb.setSource({ ...mine, label: 'Your notes and files' }, { kind: 'folder', spec: dir });
+  kb.setSource({ id: 'github:x/big', label: 'x/big', files: 200, chunks: Array.from({ length: 400 }, (_, i) => ({ path: `big/report${i}.html`, url: '', title: `report${i}.html`, text: `Assignment ${i}: regression models, forecasting, research data and the model score${i % 20 ? '' : ' for publication quality charts'}.` })) });
+  kb.boost = { [mine.id]: 1.5 };
+  const hits = kb.search('Tell me about your publication', 4);
+  assert.match(hits[0].title, /^Publication \(research paper\): Predicting shipment delays/);
+  assert.match(kb.search('What F1 score did your paper reach and how did you interpret the model?', 3)[0].text, /0\.81 F1|SHAP/);
+  assert.deepEqual(kb.fileFacts(mine.id, `Portfolio/${file}`), { passages: mine.chunks.length, title: mine.chunks[0].title });
+  assert.equal(kb.fileFacts(mine.id, 'Portfolio/scan.pdf').passages, 0);
+
+  // Naming rules on their own.
+  const paper = 'Journal of Things\nORIGINAL PAPER\nDeep learning for\nwidget inspection\nA. Author · B. Writer\nAbstract\nWe study widgets. https://doi.org/10.1/x\n' + 'text '.repeat(50) + '\nReferences\n[1] Someone.';
+  assert.equal(describeDoc('download (3).pdf', paper, ''), 'Publication (research paper): Deep learning for widget inspection (download (3).pdf)');
+  assert.equal(describeDoc('cv.pdf', 'Alex Tan\nData Engineer\nExperience ...', '(anonymous)'), 'cv.pdf');
+  assert.equal(describeDoc('slides.pdf', 'Quarterly review\nAgenda', 'Quarterly business review'), 'Quarterly business review (slides.pdf)');
 });

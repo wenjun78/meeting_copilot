@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { readNote, isIndexable } = require('./chunker');
-const { extractText } = require('./extract');
+const { extractDoc } = require('./extract');
 const { NOTE, slotByDir } = require('../slots');
 
 function walk(dir, root, out, limit) {
@@ -32,18 +32,18 @@ async function ingestFolder(folder, { maxFiles = 2000, sections = false } = {}) 
     let st;
     try { st = fs.statSync(f.full); } catch { continue; }
     if (!isIndexable(f.rel, st.size) || files >= maxFiles) { skipped++; continue; }
-    const text = await extractText(f.rel, fs.readFileSync(f.full));
+    const { text, name } = await extractDoc(f.rel, fs.readFileSync(f.full));
     if (!text.trim()) { skipped++; continue; }
     files++; bytes += st.size; newest = Math.max(newest, st.mtimeMs);
     const parts = f.rel.split('/');
     const slot = sections && parts.length > 1 ? slotByDir(parts[0]) : null;
     const url = pathToFileURL(f.full).href;
-    let shown = `${path.basename(root)}/${f.rel}`, opts = {}, typed = false;
+    let shown = `${path.basename(root)}/${f.rel}`, opts = { name }, typed = false;
     if (slot) {
       typed = parts.length === 2 && parts[1] === NOTE;
       const fileName = parts.slice(1).join('/');
       shown = `${slot.label}/${typed ? 'typed text' : fileName}`;
-      opts = { pin: !slot.searched, name: typed ? slot.title : parts[parts.length - 1], title: typed ? slot.title : `${slot.title}: ${parts[parts.length - 1]}` };
+      opts = { pin: !slot.searched, name: typed ? slot.title : name, title: typed ? slot.title : `${slot.title}: ${name}` };
     }
     const note = readNote(f.rel, text, opts);
     for (const c of note.chunks) chunks.push({ path: shown, url, title: c.title, text: c.text });

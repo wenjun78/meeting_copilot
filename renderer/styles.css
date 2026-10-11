@@ -172,6 +172,8 @@ input.keys:focus { border-color: var(--them); }
 .file-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 4px 5px 9px; background: var(--shell-2); border-radius: 6px; }
 .file-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-list .size { color: var(--muted); font-size: 11.5px; }
+.file-list .meta { grid-column: 1 / -1; color: var(--muted); font-size: 11.5px; }
+.file-list li.unread .meta { color: var(--them); }
 .file-list .btn, .eq-list .btn { padding: 2px 8px; font-size: 12px; }
 .eq-list li, .eq-sources details { background: var(--shell-2); border-radius: 6px; }
 .eq-list details > summary, .eq-sources summary { display: flex; gap: 8px; align-items: baseline; padding: 6px 9px; cursor: pointer; list-style: none; }

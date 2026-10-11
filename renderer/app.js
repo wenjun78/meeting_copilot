@@ -321,11 +321,19 @@ function ago(t) {
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
+// One row per added file: its name, what the app made of it, and how much was read. A file
+// that gave no text (a scanned or protected PDF) is said so here rather than silently ignored.
 function fileRows(list, slotId, after) {
-  return list.map(f => el('li', {},
-    el('span', { class: 'name', title: f.name, text: f.name }),
-    el('span', { class: 'size', text: fmtSize(f.size) }),
-    el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => { try { after(await call('slot:removeFile', slotId, f.name)); } catch (e) { fail(e); } } })));
+  return list.map(f => {
+    const unread = !f.passages;
+    const known = f.title && f.title !== f.name ? f.title.replace(` (${f.name})`, '').replace(' (research paper)', '') : '';
+    return el('li', { class: unread ? 'unread' : '' },
+      el('span', { class: 'name', title: f.name, text: f.name }),
+      el('span', { class: 'size', text: fmtSize(f.size) }),
+      el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => { try { after(await call('slot:removeFile', slotId, f.name)); } catch (e) { fail(e); } } }),
+      el('span', { class: 'meta', text: unread ? 'No text could be read from this file. If it is a scan or is protected, paste the text instead.'
+        : `${known ? `${known}. ` : ''}${num(f.passages)} ${f.passages === 1 ? 'passage' : 'passages'} read` }));
+  });
 }
 
 function renderSlot(info) {

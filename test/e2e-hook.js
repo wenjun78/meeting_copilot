@@ -98,8 +98,10 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const jdAdd = await js(`window.mc.call('slot:addFiles', 'jd', ${JSON.stringify([path.join(drop, 'role.md')])})`);
     await openSection('cv');
     const cvFiles = await js(`[...document.querySelectorAll('#slotFiles .name')].map(n => n.textContent)`);
+    const cvMeta = await js(`[...document.querySelectorAll('#slotFiles .meta')].map(n => n.textContent)`);
     await shot('2a-cv-section');
-    step('files in sections', { cvAdded: cvAdd.value.added, skipped: cvAdd.value.skipped, jdAdded: jdAdd.value.added, cvFilesShown: cvFiles });
+    step('files in sections', { cvAdded: cvAdd.value.added, skipped: cvAdd.value.skipped, jdAdded: jdAdd.value.added, cvFilesShown: cvFiles, cvMeta });
+    if (!/passages? read/.test(cvMeta.join())) throw new Error('the file row does not say how much was read');
     if (cvFiles.join() !== 'my cv.docx' || cvAdd.value.skipped.join() !== 'photo.png' || jdAdd.value.added.join() !== 'role.md') throw new Error('adding files to a section did not behave as expected');
 
     // Portfolio: a repository by its GitHub Pages address, a dropped folder, a loose file.
@@ -108,9 +110,18 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const folder = path.join(drop, 'side-project');
     fs.mkdirSync(folder); fs.writeFileSync(path.join(folder, 'notes.md'), '# Serengeti rollout\n\nRolled out to nine regions.');
     fs.writeFileSync(path.join(drop, 'talk.md'), '# Conference talk\n\nSpoke about feature stores.');
-    const pfAdd = await js(`window.mc.call('slot:addFiles', 'portfolio', ${JSON.stringify([folder, path.join(drop, 'talk.md')])})`);
+    // A paper saved under a meaningless name, and a PDF with no readable text.
+    const paper = '5f6f95d7-dbfd-4264-bb64-b633e88df350.pdf';
+    fs.copyFileSync(path.join(__dirname, 'fixtures', '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf'), path.join(drop, paper));
+    fs.writeFileSync(path.join(drop, 'scan.pdf'), '%PDF-1.4 nothing readable');
+    const pfAdd = await js(`window.mc.call('slot:addFiles', 'portfolio', ${JSON.stringify([folder, path.join(drop, 'talk.md'), path.join(drop, paper), path.join(drop, 'scan.pdf')])})`);
     await openSection('portfolio');
-    await waitFor('portfolio lists', () => js(`document.querySelectorAll('#kbList li').length === 2 && document.querySelectorAll('#portfolioFiles li').length === 1`));
+    await waitFor('portfolio lists', () => js(`document.querySelectorAll('#kbList li').length === 2 && document.querySelectorAll('#portfolioFiles li').length === 3`));
+    const rows = await js(`[...document.querySelectorAll('#portfolioFiles li')].map(li => ({ name: li.querySelector('.name').textContent, meta: li.querySelector('.meta').textContent, unread: li.classList.contains('unread') }))`);
+    const found = kb.search('Tell me about your publication', 2)[0];
+    step('publication', { rows, topHitForPublication: found && found.title });
+    const paperRow = rows.find(r => r.name === paper), scanRow = rows.find(r => r.name === 'scan.pdf');
+    if (!paperRow || !/^Publication: Predicting shipment delays.*passages read$/.test(paperRow.meta) || !scanRow || !scanRow.unread || !/^Publication \(research paper\)/.test(found.title)) throw new Error('the publication was not read, named or found as expected');
     step('portfolio', { pages: viaPages.ok, sources: await js(`[...document.querySelectorAll('#kbList .label')].map(n => n.textContent)`), files: await js(`[...document.querySelectorAll('#portfolioFiles .name')].map(n => n.textContent)`), added: pfAdd.value.added, folders: pfAdd.value.folders });
     await shot('2b-portfolio');
 

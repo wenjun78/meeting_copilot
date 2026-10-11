@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut, screen, dialog, shell, safeStorage, net, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut, screen, dialog, shell, safeStorage, net, systemPreferences, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { fileURLToPath } = require('url');
@@ -54,6 +54,15 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
+  // Right-click: cut, copy and paste in text boxes; copy for selected text anywhere else.
+  win.webContents.on('context-menu', (_e, p) => {
+    const items = [];
+    if (p.isEditable) {
+      items.push({ role: 'cut', enabled: p.editFlags.canCut }, { role: 'copy', enabled: p.editFlags.canCopy }, { role: 'paste', enabled: p.editFlags.canPaste },
+        { type: 'separator' }, { role: 'selectAll', enabled: p.editFlags.canSelectAll });
+    } else if (p.selectionText && p.selectionText.trim()) items.push({ role: 'copy' });
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
+  });
 
   let saveTimer;
   const remember = () => {
@@ -115,8 +124,10 @@ function slotInfo(slot) {
   try { text = frontMatter(fs.readFileSync(path.join(dir, NOTE), 'utf8')).body.trim(); } catch { /* nothing typed yet */ }
   let files = [];
   try {
+    const sourceId = `folder:${myFilesDir()}`;
     files = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isFile() && e.name !== NOTE)
-      .map(e => ({ name: e.name, size: fs.statSync(path.join(dir, e.name)).size })).sort((a, b) => a.name.localeCompare(b.name));
+      .map(e => ({ name: e.name, size: fs.statSync(path.join(dir, e.name)).size, ...kb.fileFacts(sourceId, `${slot.label}/${e.name}`) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   } catch { /* no folder yet */ }
   return { id: slot.id, label: slot.label, title: slot.title, searched: !!slot.searched, text, files };
 }
@@ -557,6 +568,7 @@ app.whenReady().then(() => {
   config = new ConfigStore(path.join(dir, 'config.json'), crypto);
   config.load();
   kb = new KnowledgeBase(path.join(dir, 'knowledge')).load();
+  kb.boost = { [`folder:${myFilesDir()}`]: 1.5 }; // what the user added by hand outranks bulk repository content
   llm = new LLM(() => config.get(), netFetch);
   ocr = new OcrEngine({ dataDir: path.join(dir, 'tessdata'), fetchFn: netFetch });
   copilot = new Copilot({ getConfig: () => config.get(), llm, kb, liveSearch: (t, q, o) => api.liveSearch(t, q, { ...o, fetchFn: netFetch }) });

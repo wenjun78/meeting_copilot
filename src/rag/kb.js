@@ -12,6 +12,7 @@ class KnowledgeBase {
     this.chunks = [];    // {sourceId,path,url,title,text,vec?}
     this.embedModel = '';
     this._bm25 = null;
+    this.boost = {};     // sourceId -> factor; the user's own notes and files outrank bulk sources
   }
 
   load() {
@@ -96,7 +97,11 @@ class KnowledgeBase {
   search(query, k = 6, queryVec = null) {
     if (!this.chunks.length) return [];
     if (!this._bm25) this._bm25 = new BM25(this.chunks);
-    const lexical = this._bm25.search(query, 30);
+    let lexical = this._bm25.search(query, 60);
+    if (Object.keys(this.boost).length) {
+      lexical = lexical.map(r => ({ index: r.index, score: r.score * (this.boost[this.chunks[r.index].sourceId] || 1) })).sort((a, b) => b.score - a.score);
+    }
+    lexical = lexical.slice(0, 30);
     let ranked = lexical;
     if (queryVec) {
       const q = normalize(Float32Array.from(queryVec));
@@ -143,6 +148,12 @@ class KnowledgeBase {
       files.set(c.path, f);
     }
     return [...bySource].map(([id, files]) => ({ id, label: (this.sources[id] || {}).label || id, files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)) }));
+  }
+
+  // How one file was read: how many passages it gave and the name it was given.
+  fileFacts(sourceId, filePath) {
+    const mine = this.chunks.filter(c => c.sourceId === sourceId && c.path === filePath);
+    return { passages: mine.length, title: mine.length ? mine[0].title.split(' — ')[0] : '' };
   }
 
   // The text of one file as it was read, passages joined in order.
