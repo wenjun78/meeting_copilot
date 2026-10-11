@@ -264,10 +264,38 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=transcript]').click()`);
     win.setBounds({ x: 0, y: 0, width: 1500, height: 860 });
     await new Promise(r => setTimeout(r, 500));
+    // Conversation log: earlier answers sit under the current one in the wide layout, every
+    // answer is in the transcript where it was given, and the saved log carries them too.
+    await js(`document.querySelector('#logList details').open = true`);
+    await new Promise(r => setTimeout(r, 200));
     await shot('8-wide');
+    const log = {
+      shown: await js(`getComputedStyle(document.getElementById('log')).display`),
+      earlier: await js(`[...document.querySelectorAll('#logList details')].map(d => ({ asked: d.querySelector('summary span').textContent, answer: d.querySelector('.card').innerText.slice(0, 60) }))`),
+      onCard: await js(`document.getElementById('asked').textContent`),
+      inTranscript: await js(`[...document.querySelectorAll('.line.answer summary')].map(n => n.textContent)`),
+      saved: copilot.transcriptText().split('\n').filter(l => /Suggested answer|^\[.*\] Them:/.test(l)).map(l => l.replace(/^\[[^\]]*\] /, '')).slice(0, 4),
+    };
+    step('conversation log', log);
+    if (log.shown !== 'flex' || !log.earlier.length || !/duplicate/i.test(log.earlier[log.earlier.length - 1].asked) || log.earlier.some(x => x.asked === log.onCard) || log.inTranscript.length < 2 || !log.saved.some(l => /^Suggested answer/.test(l))) throw new Error('the conversation log is missing answers');
 
     await js(`document.getElementById('toggle').click()`);
     await waitFor('stopped', () => js(`!document.body.classList.contains('listening')`));
+
+    // Nothing to answer and Knowledge open: side by side the answer area stays; in the
+    // narrow window it steps aside. Clearing the meeting empties the log.
+    await js(`document.getElementById('resetBtn').click()`);
+    await waitFor('cleared', () => js(`document.getElementById('card').classList.contains('idle') && !document.querySelector('.line')`));
+    await js(`document.querySelector('[data-tab=knowledge]').click()`);
+    await new Promise(r => setTimeout(r, 400));
+    const cueOf = () => js(`getComputedStyle(document.querySelector('.cue')).display`);
+    const wide = { setup: await js(`document.body.classList.contains('setup')`), cue: await cueOf(), log: await js(`getComputedStyle(document.getElementById('log')).display`) };
+    await shot('9-wide-knowledge');
+    win.setBounds({ x: 0, y: 0, width: 440, height: 700 });
+    await new Promise(r => setTimeout(r, 500));
+    const narrow = { cue: await cueOf() };
+    step('answer area while setting up', { wide, narrow });
+    if (!wide.setup || wide.cue !== 'flex' || wide.log !== 'none' || narrow.cue !== 'none') throw new Error('the answer area is not kept in the wide layout while setting up');
     result.ok = true;
     clearTimeout(timer);
     finish();

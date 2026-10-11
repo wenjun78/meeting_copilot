@@ -224,7 +224,7 @@ class Copilot extends EventEmitter {
       if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
       this.lastError = '';
       // Remembered so a follow-up ("make it shorter", "and the second point?") has something to refer to.
-      this.history.push({ mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
+      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
       if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
@@ -325,9 +325,13 @@ class Copilot extends EventEmitter {
     return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
   }
 
+  // The conversation as text, in order: what each side said and every answer suggested.
   transcriptText() {
-    return this.entries.filter(e => !e.pending)
-      .map(e => `[${new Date(e.t).toLocaleTimeString()}] ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}`).join('\n');
+    const at = (t) => `[${new Date(t).toLocaleTimeString()}]`;
+    const said = this.entries.filter(e => !e.pending).map(e => ({ t: e.t, text: `${at(e.t)} ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}` }));
+    const answers = this.history.map(h => ({ t: h.t || 0,
+      text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
+    return [...said, ...answers].sort((a, b) => a.t - b.t).map(x => x.text).join('\n');
   }
 }
 

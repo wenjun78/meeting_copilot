@@ -518,7 +518,7 @@ function wireIpc() {
   handle('meeting:reset', () => { copilot.reset(); return true; });
   handle('meeting:export', async () => {
     const text = copilot.transcriptText();
-    if (!text) throw new Error('The transcript is empty.');
+    if (!text) throw new Error('Nothing has been said or answered yet.');
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
     const r = await dialog.showSaveDialog(win, { defaultPath: `meeting-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
     if (r.canceled || !r.filePath) return null;

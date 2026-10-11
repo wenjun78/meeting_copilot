@@ -47,6 +47,10 @@
       <input id="askInput" type="text" placeholder="Ask your sources a question" aria-label="Ask your sources a question" autocomplete="off">
       <button class="btn" type="submit">Ask</button>
     </form>
+    <div class="log" id="log" aria-label="Earlier answers">
+      <h3>Earlier answers</h3>
+      <div id="logList"></div>
+    </div>
   </section>
 
   <section class="lower">
@@ -61,7 +65,7 @@
       <div class="lines" id="lines"></div>
       <p class="empty" id="linesEmpty">Nothing said yet. Start listening and both sides of the call appear here.</p>
       <div class="panel-foot">
-        <button id="exportBtn" class="btn quiet">Save transcript</button>
+        <button id="exportBtn" class="btn quiet" title="What both sides said and every answer suggested, as a text file">Save conversation log</button>
         <button id="resetBtn" class="btn quiet">Clear for a new meeting</button>
       </div>
     </div>

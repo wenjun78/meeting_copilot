@@ -32,21 +32,21 @@ function toast(message, level = 'info') {
 const fail = (e) => toast(e.message || String(e), 'error');
 
 // ---- cue card ---------------------------------------------------------------
-function inline(parent, text) {
+function inline(parent, text, sources = state.answer.sources) {
   for (const part of text.split(/(\*\*[^*]+\*\*|\[\d+\]|`[^`]+`)/)) {
     if (!part) continue;
     let m;
     if ((m = /^\*\*([^*]+)\*\*$/.exec(part))) parent.append(el('strong', { text: m[1] }));
     else if ((m = /^`([^`]+)`$/.exec(part))) parent.append(el('code', { text: m[1] }));
     else if ((m = /^\[(\d+)\]$/.exec(part))) {
-      const src = state.answer.sources.find(s => s.n === Number(m[1]));
+      const src = sources.find(s => s.n === Number(m[1]));
       if (src) parent.append(el('button', { class: 'cite', type: 'button', title: `${src.title}\n${src.snippet}`, text: m[1], onclick: () => openSource(src) }));
       else parent.append(part);
     } else parent.append(part);
   }
 }
 
-function renderAnswerText(card, text) {
+function renderAnswerText(card, text, sources = state.answer.sources) {
   card.replaceChildren();
   let list = null, first = true, code = null;
   for (const raw of text.split('\n')) {
@@ -62,12 +62,12 @@ function renderAnswerText(card, text) {
     const bullet = /^(?:[-*•]|\d+[.)])\s+(.*)$/.exec(line);
     if (bullet) {
       if (!list) card.append((list = el('ul')));
-      const li = el('li'); inline(li, bullet[1]); list.append(li);
+      const li = el('li'); inline(li, bullet[1], sources); list.append(li);
       continue;
     }
     list = null;
     const p = el('p', { class: /^check:/i.test(line) ? 'check' : first ? 'lead' : '' });
-    inline(p, line.replace(/^#+\s*/, ''));
+    inline(p, line.replace(/^#+\s*/, ''), sources);
     card.append(p); first = false;
   }
 }
@@ -114,14 +114,46 @@ window.mc.on('answer', (e) => {
   else if (e.id < a.id) return; // a newer answer has replaced this one
   else if (e.type === 'sources') a.sources = e.sources;
   else if (e.type === 'delta') a.text += e.text;
-  else if (e.type === 'done') { a.status = 'done'; a.text = e.text || a.text; }
+  else if (e.type === 'done') { a.status = 'done'; a.text = e.text || a.text; logAnswer(a); }
   else if (e.type === 'error') {
     if (a.status === 'idle' || e.id > a.id) state.answer = { id: e.id, text: '', sources: [], status: 'error', error: e.message };
     else { a.status = 'error'; a.error = e.message; }
   }
   cancelAnimationFrame(state.raf);
-  state.raf = requestAnimationFrame(() => { renderAnswer(); updateSetupMode(); });
+  state.raf = requestAnimationFrame(() => { renderAnswer(); renderLog(); updateSetupMode(); });
 });
+
+// ---- conversation log: every answer given, kept for the meeting ----------------------
+// Each finished answer is added to the transcript where it was given, and listed under
+// the current answer (in the wide layout) so an earlier one can be read again.
+const answerLog = [];
+const askedLabel = (a) => (a.mode === 'typed' ? `You asked: ${a.question}` : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : 'From the screen') : `They said: ${a.question}`);
+function logAnswer(a) {
+  if (!a.text || !a.text.trim() || answerLog.some(x => x.id === a.id)) return;
+  const item = { id: a.id, t: Date.now(), mode: a.mode, question: a.question || '', text: a.text, sources: a.sources || [] };
+  answerLog.push(item);
+  const panel = $('tab-transcript');
+  const pinned = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 60;
+  const lead = item.text.split('\n').map(l => l.trim()).find(l => l && !/^(```|~~~)/.test(l)) || '';
+  $('lines').append(el('div', { class: 'line answer', 'data-who': 'answer' }, el('span', { class: 'who', text: 'Answer' }),
+    el('details', {}, el('summary', { title: askedLabel(item), text: lead.replace(/\*\*|\s*\[\d+\]/g, '') }), el('pre', { text: item.text }))));
+  restyleLines();
+  if (pinned) panel.scrollTop = panel.scrollHeight;
+}
+function renderLog() {
+  // The answer on the card is not repeated beneath itself.
+  const earlier = answerLog.filter(x => x.id !== state.answer.id || state.answer.status === 'idle').reverse();
+  $('log').classList.toggle('has', earlier.length > 0);
+  const open = new Set([...$('logList').querySelectorAll('details[open]')].map(d => d.dataset.id));
+  $('logList').replaceChildren(...earlier.map(x => {
+    const body = el('div', { class: 'card' });
+    renderAnswerText(body, x.text, x.sources);
+    const d = el('details', { 'data-id': String(x.id) },
+      el('summary', {}, el('time', { text: new Date(x.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }), el('span', { text: askedLabel(x) })), body);
+    d.open = open.has(String(x.id));
+    return d;
+  }));
+}
 
 const ask = (req) => call('answer:ask', req).catch(fail);
 $('answerNow').addEventListener('click', () => ask({ mode: 'manual' }));
@@ -181,10 +213,11 @@ window.mc.on('transcript', ({ type, entry }) => {
 $('resetBtn').addEventListener('click', async () => {
   await call('meeting:reset').catch(fail);
   lines.clear(); $('lines').replaceChildren(); restyleLines();
-  state.answer = { id: state.answer.id, text: '', sources: [], status: 'idle' }; renderAnswer();
+  answerLog.length = 0;
+  state.answer = { id: state.answer.id, text: '', sources: [], status: 'idle' }; renderAnswer(); renderLog();
 });
 $('exportBtn').addEventListener('click', async () => {
-  try { const p = await call('meeting:export'); if (p) toast(`Transcript saved to ${p}`); } catch (e) { fail(e); }
+  try { const p = await call('meeting:export'); if (p) toast(`Conversation log saved to ${p}`); } catch (e) { fail(e); }
 });
 
 // ---- listening --------------------------------------------------------------
@@ -271,7 +304,8 @@ function showTab(name) {
   for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== `tab-${name}`;
   updateSetupMode();
 }
-// While Knowledge or Settings is open and there is no call or answer, give them the whole window.
+// While Knowledge or Settings is open and there is no call or answer, give them the whole
+// window. (Side by side, in the wide layout, the answer area stays: see the stylesheet.)
 function updateSetupMode() {
   const tab = document.querySelector('.tabs button[aria-selected="true"]');
   const settingUp = tab && (tab.dataset.tab === 'knowledge' || tab.dataset.tab === 'settings');

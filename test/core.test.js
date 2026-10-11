@@ -252,6 +252,13 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   await co.answer({ mode: 'screen', question: 'Summarise this slide' });
   assert.match(srv.log.chat.at(-1).messages[1].content, /Base the reply on the shared-screen text/);
   assert.match(co.transcriptText(), /Them: How do you handle/);
+  // The saved log has what was said and each answer suggested, in the order they happened.
+  const saved = co.transcriptText();
+  assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer:\n {4}\S/);
+  assert.match(saved, /Suggested answer \(you asked: What threshold do we use\?\):\n {4}[\s\S]*?0\.92/);
+  assert.match(saved, /Suggested answer \(from the screen\):/);
+  co.reset();
+  assert.equal(co.transcriptText(), '');
 });
 
 test('copilot: statements do not trigger an answer; auto-answer can be turned off', async () => {

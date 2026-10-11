@@ -53,7 +53,8 @@ npm start
 
 | | |
 |---|---|
-| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses |
+| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses, with each answer where it was given. "Save conversation log" writes it all to a text file |
+| Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
 | Answers | Written automatically when they ask a question; one or two sentences to say, then supporting points, with numbered sources you can click |
 | Ask | Type your own question, or "Answer from the screen" for what is being shown, including SQL and code tasks |
