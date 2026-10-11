@@ -2,6 +2,7 @@
 const { EventEmitter } = require('events');
 const { detectQuestion } = require('./question');
 const { tokenize } = require('./rag/tokenize');
+const { rankPrepared } = require('./qa');
 const { planPinned } = require('./slots');
 
 // Holds the meeting state (transcript, shared-screen text) and produces
@@ -200,13 +201,22 @@ class Copilot extends EventEmitter {
       }
       const [local, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
-      const refs = [...live, ...local].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
+      // Answers prepared in advance go to the model in their own block, closest first: those
+      // the search found for this question, then by how alike the questions are worded.
+      const found = new Set(local.filter(r => r.qa).map(r => r.qa.q));
+      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query)
+        .map(p => ({ ...p, found: found.has(p.q) }))
+        .sort((a, b) => ((b.match ? 2 : 0) + (b.found ? 1 : 0)) - ((a.match ? 2 : 0) + (a.found ? 1 : 0)));
+      const refs = [...live, ...local.filter(r => !r.qa)].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
       this.emit('answer', {
         type: 'sources', id,
-        sources: refs.map((r, i) => ({ n: i + 1, title: r.title, path: r.path, url: r.url, snippet: r.text.slice(0, 280) })),
+        sources: [
+          ...prepared.filter(p => p.match).slice(0, 2).map(p => ({ n: 'Q', title: `Prepared: ${p.q}`, path: '', url: '', snippet: p.a.slice(0, 280) })),
+          ...refs.map((r, i) => ({ n: i + 1, title: r.title, path: r.path, url: r.url, snippet: r.text.slice(0, 280) })),
+        ],
       });
 
-      const send = (lean) => this.llm.chatStream(this._buildMessages({ asked, mode, refs, cfg, lean }), {
+      const send = (lean) => this.llm.chatStream(this._buildMessages({ asked, mode, refs, prepared, cfg, lean }), {
         signal: ctl.signal,
         maxTokens: cfg.answerLength === 'detailed' ? 1800 : 1000, // headroom for reasoning models; the prompt sets the real length
         onDelta: (piece) => this.emit('answer', { type: 'delta', id, text: piece }),
@@ -259,7 +269,7 @@ class Copilot extends EventEmitter {
   }
 
   // lean: a smaller request (fewer notes, references and transcript lines).
-  _buildMessages({ asked, mode, refs, cfg, lean = false }) {
+  _buildMessages({ asked, mode, refs, prepared = [], cfg, lean = false }) {
     if (lean) refs = refs.slice(0, 3);
     const detailed = cfg.answerLength === 'detailed';
     const system = [
@@ -272,6 +282,7 @@ class Copilot extends EventEmitter {
       'Grounding:',
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
       '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
+      '- "Answers I prepared" are replies the user wrote in advance for questions they expect; what they state is the user\'s own fact. When what is asked is the same question as one of them, or close to it in meaning even if worded differently, build the reply on that prepared answer: keep its facts, examples, numbers and stance, fit it to the format and to exactly what was asked, and do not swap in other material or add a "Check:" line for what it states. When two apply, combine them. When none is close to the question, leave them out.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
       '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',
@@ -316,6 +327,16 @@ class Copilot extends EventEmitter {
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
     if (earlier) parts.push(`Earlier in this meeting you suggested these answers (most recent last):\n${earlier}`);
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
+    // Prepared answers, closest first, as many as fit. In lean mode only the closest few.
+    const ready = [];
+    let space = lean ? 1500 : 8000;
+    for (const p of prepared) {
+      const item = `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`;
+      if (item.length > space) { if (ready.length) break; continue; }
+      ready.push(item); space -= item.length;
+      if (lean && ready.length >= 2) break;
+    }
+    if (ready.length) parts.push(`Answers I prepared for questions I expect (the likeliest matches first):\n${ready.join('\n\n')}`);
     if (refs.length) {
       parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, lean ? 800 : 1500)}`).join('\n\n'));
     } else parts.push('Reference material: none found for this question.');

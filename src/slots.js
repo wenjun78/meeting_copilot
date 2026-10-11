@@ -4,13 +4,15 @@ const path = require('path');
 
 // The sections of what a user gives the app. Each is a folder among the app's own files:
 // the text typed into the section is saved as NOTE, files added to it sit beside that.
-// About me, CV, JD and Instructions are sent to the model with every answer. Publications are
+// About me, CV, JD and Instructions are sent to the model with every answer. Q&A holds answers
+// prepared for expected questions, offered when a question comes up. Publications are
 // searched by section, with each paper's title and abstract sent every time. Portfolio is searched.
 const SLOTS = [
   { id: 'about', dir: 'about-me', label: 'About me', title: 'About me' },
   { id: 'cv', dir: 'cv', label: 'CV', title: 'CV' },
   { id: 'jd', dir: 'jd', label: 'JD', title: 'Job description' },
   { id: 'instructions', dir: 'instructions', label: 'Instructions', title: 'Instructions for this meeting' },
+  { id: 'qa', dir: 'qa', label: 'Q&A', title: 'Prepared answers', qa: true },
   { id: 'publications', dir: 'publications', label: 'Publications', title: 'Publication', papers: true },
   { id: 'portfolio', dir: 'portfolio', label: 'Portfolio', title: 'Portfolio', searched: true },
 ];

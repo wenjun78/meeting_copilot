@@ -82,6 +82,7 @@
         <button role="tab" data-view="cv" aria-selected="false">CV</button>
         <button role="tab" data-view="jd" aria-selected="false">JD</button>
         <button role="tab" data-view="instructions" aria-selected="false">Instructions</button>
+        <button role="tab" data-view="qa" aria-selected="false">Q&amp;A</button>
         <button role="tab" data-view="publications" aria-selected="false">Publications</button>
         <button role="tab" data-view="portfolio" aria-selected="false">Portfolio</button>
         <button role="tab" data-view="equipped" aria-selected="false">Equipped</button>
@@ -95,6 +96,25 @@
           <strong>Drop files here</strong><span>or click to choose them. PDF, Word, Markdown or text.</span>
         </div>
         <ul class="file-list" id="slotFiles"></ul>
+      </section>
+
+      <section class="slot" id="qaPanel" role="tabpanel" hidden>
+        <p class="slot-what">Questions you expect, with the answer you want to give. When the same or a similar question comes up, the reply is built on your answer.</p>
+        <form id="qaForm" class="qa-form">
+          <input id="qaQ" type="text" placeholder="Question, e.g. Why are you leaving your role?" aria-label="Question" autocomplete="off">
+          <textarea id="qaA" rows="5" placeholder="Your answer, in your own words. Notes are enough: the reply is shaped from them." aria-label="Your answer"></textarea>
+          <div class="row"><button id="qaAdd" class="btn primary" type="submit">Add</button><button id="qaCancel" class="btn quiet" type="button" hidden>Cancel</button><span class="hint" id="qaState"></span></div>
+        </form>
+        <details class="qa-many" id="qaMany">
+          <summary>Add several at once</summary>
+          <textarea id="qaBulk" rows="7" placeholder="Q: Tell me about yourself&#10;A: I am ...&#10;&#10;Q: Why this role?&#10;A: ..." aria-label="Several questions and answers"></textarea>
+          <div class="row"><button id="qaBulkAdd" class="btn" type="button">Add all</button><span class="hint">Write each as Q: and A:, or put each question on its own line ending in "?" with the answer beneath.</span></div>
+          <div class="drop" id="qaDrop" role="button" tabindex="0">
+            <strong>Drop a file of questions and answers</strong><span>or click to choose one. Word, PDF, Markdown or text, written the same way.</span>
+          </div>
+        </details>
+        <ul class="qa-list" id="qaList"></ul>
+        <p class="empty" id="qaEmpty">Nothing prepared yet. Add the questions you expect and how you want to answer them.</p>
       </section>
 
       <section class="slot" id="portfolioPanel" role="tabpanel" hidden>

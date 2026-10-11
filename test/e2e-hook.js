@@ -125,6 +125,26 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('portfolio', { pages: viaPages.ok, sources: await js(`[...document.querySelectorAll('#kbList .label')].map(n => n.textContent)`), files: await js(`[...document.querySelectorAll('#portfolioFiles .name')].map(n => n.textContent)`), added: pfAdd.value.added, folders: pfAdd.value.folders });
     await shot('2b-portfolio');
 
+    // Q&A: add an answer with the form, several by pasting, change one, remove one.
+    await openSection('qa');
+    const fillQa = (q, a) => js(`(() => { document.getElementById('qaQ').value = ${JSON.stringify(q)}; document.getElementById('qaA').value = ${JSON.stringify(a)}; document.getElementById('qaAdd').click(); })()`);
+    const qaRows = () => js(`[...document.querySelectorAll('#qaList li')].map(li => ({ q: li.querySelector('.q').textContent, a: li.querySelector('.a').textContent }))`);
+    await fillQa('How do you deal with duplicate customer records?', 'Two passes: exact match on tax ID, then fuzzy match on name and address at 0.92.');
+    await waitFor('first prepared answer', async () => (await qaRows()).length === 1);
+    await js(`(() => { document.getElementById('qaMany').open = true; document.getElementById('qaBulk').value = 'Q: Why do you want to leave your current role?\\nA: I want to own models end to end.\\n\\nQ: What is your biggest weakness?\\nA: I over-prepare.'; document.getElementById('qaBulkAdd').click(); })()`);
+    await waitFor('pasted answers', async () => (await qaRows()).length === 3);
+    await js(`document.querySelectorAll('#qaList li')[2].querySelectorAll('button')[0].click()`);
+    await waitFor('editing', () => js(`document.getElementById('qaAdd').textContent === 'Save changes' && document.getElementById('qaQ').value === 'What is your biggest weakness?'`));
+    await js(`(() => { document.getElementById('qaA').value = 'I over-prepare, so I time-box research to a day.'; document.getElementById('qaAdd').click(); })()`);
+    await waitFor('edited', async () => /time-box/.test((await qaRows())[2].a) && await js(`document.getElementById('qaAdd').textContent === 'Add'`));
+    await js(`document.querySelectorAll('#qaList li')[1].querySelectorAll('button')[1].click()`);
+    await waitFor('removed', async () => (await qaRows()).length === 2);
+    await new Promise(r => setTimeout(r, 300));
+    await shot('2d-qa');
+    const qaNow = await qaRows();
+    step('prepared answers', { rows: qaNow, state: await js(`document.getElementById('qaState').textContent`), inKb: kb.prepared().map(p => p.q), selected: await selected() });
+    if (qaNow.map(r => r.q).join('|') !== 'How do you deal with duplicate customer records?|What is your biggest weakness?' || kb.prepared().length !== 2) throw new Error('the prepared answers were not kept as edited');
+
     // Publications: the paper goes in its own section, is searched by section, and its
     // abstract is among what goes with every answer. "Sync all" is gone from Portfolio.
     await openSection('publications');
@@ -218,6 +238,7 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
       lines: await js(`[...document.querySelectorAll('.line')].map(l => l.dataset.who + ': ' + l.lastChild.textContent)`),
       levels: await js(`[document.getElementById('lvThem').style.width, document.getElementById('lvYou').style.width]`),
     });
+    if (!(await js(`[...document.querySelectorAll('.source')].map(s => s.textContent)`)).some(t => /^QPrepared: How do you deal with duplicate/.test(t))) throw new Error('the prepared answer for this question was not offered');
     let viaRealScreen = realScreen;
     if (realScreen) {
       try { await waitFor('real screen text', () => js(`/customers/i.test(document.getElementById('screenText').textContent)`), 20000); }

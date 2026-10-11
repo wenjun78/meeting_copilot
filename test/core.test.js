@@ -679,7 +679,7 @@ test('loose notes from earlier versions are moved into their sections', () => {
   assert.deepEqual(ls('portfolio'), ['project notes.md']);
   assert.equal(fs.readFileSync(path.join(dir, 'about-me', NOTE), 'utf8'), 'Engineer.');
   assert.deepEqual(moveLooseFilesIntoSections(dir), [], 'nothing left to move');
-  assert.equal(SLOTS.filter(s => !s.searched && !s.papers).length, 4);
+  assert.equal(SLOTS.filter(s => !s.searched && !s.papers && !s.qa).length, 4);
 });
 
 test('the inventory lists every searchable file with its passages, and returns a file as it was read', async () => {
@@ -777,7 +777,7 @@ test('a paper saved under a meaningless file name is read, named by its title an
 
 test('Publications: a paper is searched by section, its abstract goes with every answer, and papers in Portfolio move over once', async () => {
   const { movePapersToPublications, planPinned, SLOTS } = require('../src/slots');
-  assert.deepEqual(SLOTS.map(s => s.id), ['about', 'cv', 'jd', 'instructions', 'publications', 'portfolio']);
+  assert.deepEqual(SLOTS.map(s => s.id), ['about', 'cv', 'jd', 'instructions', 'qa', 'publications', 'portfolio']);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pubs-'));
   const file = '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf';
   fs.mkdirSync(path.join(dir, 'portfolio'));
@@ -812,4 +812,70 @@ test('Publications: a paper is searched by section, its abstract goes with every
 
   assert.equal(abstractOf('Title line\n\n## Introduction\n\n' + 'Long sentence here. '.repeat(200)).length <= 1500, true);
   assert.equal(abstractOf(''), '');
+});
+
+test('Q&A: prepared answers are read from pasted text, kept one per question, and offered when a similar question is asked', async () => {
+  const { parseQA, rankPrepared, normalizePairs, QA_FILE } = require('../src/qa');
+
+  // Three ways of writing them down.
+  assert.deepEqual(parseQA('Q: Why do you want to leave\nyour current role?\nA: I want to build ML systems end to end.\nMy current team only maintains them.\n\n**Q2.** What is your biggest weakness?\nAnswer: I over-prepare.'), [
+    { q: 'Why do you want to leave your current role?', a: 'I want to build ML systems end to end.\nMy current team only maintains them.' },
+    { q: 'What is your biggest weakness?', a: 'I over-prepare.' }]);
+  assert.deepEqual(parseQA('## Tell me about yourself\n\nI am an AI engineer.\n\n## Why us?\nThe platform team.'), [{ q: 'Tell me about yourself', a: 'I am an AI engineer.' }, { q: 'Why us?', a: 'The platform team.' }]);
+  assert.deepEqual(parseQA('1. Tell me about yourself?\nI am an AI engineer.\n\nFour years in data.\n\nWhy this role?\nIt fits. Does it not?\n'), [{ q: 'Tell me about yourself?', a: 'I am an AI engineer.\n\nFour years in data.' }, { q: 'Why this role?', a: 'It fits. Does it not?' }]);
+  assert.deepEqual(parseQA('Just some notes with no questions.'), []);
+  // The same question again replaces the earlier answer; empty halves are dropped.
+  assert.deepEqual(normalizePairs([{ q: 'Why us?', a: 'One' }, { q: 'x', a: '' }, { q: '  why us ', a: 'Two' }]), [{ q: 'why us', a: 'Two' }]);
+
+  // Differently worded questions still point at the right prepared answer.
+  const pairs = [
+    { q: 'Why do you want to leave your current role?', a: 'I want to own models end to end; my current work is support for the CPM system.' },
+    { q: 'What is your biggest weakness?', a: 'I over-prepare, so I now time-box research to a day.' },
+    { q: 'What are your salary expectations?', a: 'I am looking at the market range for a senior AI engineer and am flexible for the right scope.' },
+  ];
+  const top = (asked) => rankPrepared(pairs, asked)[0];
+  assert.match(top('So, um, why are you leaving your current job?').q, /leave/);
+  assert.ok(top('So, um, why are you leaving your current job?').match);
+  assert.match(top('What would you say are your weaknesses?').q, /weakness/);
+  assert.match(top('And what salary are you expecting?').q, /salary/);
+  assert.ok(!top('How do you handle duplicate customer records?').match, 'an unrelated question matches nothing');
+
+  // In the app's files the list is one passage per pair, found by search and listed as prepared.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-'));
+  fs.mkdirSync(path.join(dir, 'qa'));
+  fs.writeFileSync(path.join(dir, 'qa', QA_FILE), JSON.stringify(pairs));
+  fs.mkdirSync(path.join(dir, 'cv'));
+  fs.writeFileSync(path.join(dir, 'cv', '_note.md'), 'Engineer, AI Systems. Built ETL pipelines and a chatbot.');
+  const mine = await ingestFolder(dir, { sections: true });
+  assert.equal(mine.chunks.filter(c => c.path === 'Q&A/prepared answers').length, 3);
+  assert.ok(!mine.pinned.some(p => p.slot === 'qa'), 'prepared answers are not pinned notes');
+  const kb = new KnowledgeBase(null);
+  kb.setSource(mine);
+  assert.deepEqual(kb.prepared(), pairs);
+  assert.equal(kb.search('salary expectations', 3)[0].title, 'Prepared answer: What are your salary expectations?');
+
+  // Asked in a meeting: the prepared answers go to the model in their own block, the closest
+  // first, named among the sources, and not repeated as numbered references.
+  const s2 = await mock.start({ sttLines: ['So why are you leaving your current job?'], answer: 'I want to own models end to end.' });
+  const getConfig = cfgFor({ llm: { baseUrl: s2.base + '/v1', apiKey: 'test-key', model: 'chat-model', extra: {} } });
+  const co = new Copilot({ getConfig, llm: new LLM(getConfig), kb, debounceMs: 20 });
+  let sources = null;
+  co.on('answer', e => { if (e.type === 'sources') sources = e.sources; });
+  await co.answer({ mode: 'typed', question: 'Why are you leaving your current job?' });
+  const prompt = s2.log.chat.at(-1).messages[1].content;
+  const block = /Answers I prepared for questions I expect[^\n]*\n([\s\S]*?)\n\nReference material/.exec(prompt);
+  assert.ok(block, prompt);
+  assert.match(block[1], /^Q: Why do you want to leave your current role\?\nA: I want to own models end to end/);
+  assert.match(block[1], /Q: What is your biggest weakness\?[\s\S]*Q: What are your salary expectations\?/, 'the others are still offered, for questions worded differently');
+  assert.ok(!/\[\d+\] Prepared answer/.test(prompt), 'not repeated as a numbered reference');
+  assert.match(s2.log.chat.at(-1).messages[0].content, /"Answers I prepared" are replies the user wrote in advance/);
+  assert.deepEqual(sources.filter(x => x.n === 'Q').map(x => x.title), ['Prepared: Why do you want to leave your current role?']);
+  assert.ok(sources.filter(x => x.n !== 'Q').every((x, i) => x.n === i + 1));
+
+  // Lean mode sends only the closest two; with nothing prepared there is no block at all.
+  const lean = co._buildMessages({ asked: 'x', mode: 'typed', refs: [], prepared: rankPrepared(pairs, 'salary'), cfg: getConfig(), lean: true })[1].content;
+  assert.equal((lean.match(/^Q: /gm) || []).length, 2);
+  assert.match(lean, /prepared[^\n]*\nQ: What are your salary expectations\?/);
+  assert.ok(!/Answers I prepared/.test(co._buildMessages({ asked: 'x', mode: 'typed', refs: [], cfg: getConfig() })[1].content));
+  await s2.close();
 });
