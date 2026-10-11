@@ -17,8 +17,12 @@
     <button id="toggle" class="btn primary">Start listening</button>
     <button id="compact" class="icon" title="Compact view: answer only" aria-label="Compact view" aria-pressed="false">
       <svg viewBox="0 0 16 16"><path d="M3 5.5h10M3 8h10M3 10.5h6" /></svg></button>
+    <button id="onTop" class="icon" title="Stay on top of other windows" aria-label="Stay on top of other windows" aria-pressed="true">
+      <svg viewBox="0 0 16 16"><path d="M6 2.5h4l-.6 4 2.1 2.2H4.5L6.6 6.5zM8 8.7v4.8" /></svg></button>
     <button id="min" class="icon" title="Minimise" aria-label="Minimise"><svg viewBox="0 0 16 16"><path d="M3.5 11.5h9" /></svg></button>
-    <button id="max" class="icon" title="Maximise" aria-label="Maximise"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg></button>
+    <button id="max" class="icon" title="Maximise" aria-label="Maximise">
+      <svg viewBox="0 0 16 16" class="i-max"><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></svg>
+      <svg viewBox="0 0 16 16" class="i-restore"><rect x="3.5" y="5.5" width="7" height="7" rx="1" /><path d="M5.5 5.5v-2h7v7h-2" /></svg></button>
     <button id="close" class="icon danger" title="Close" aria-label="Close"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
   </div>
 </header>
@@ -69,39 +73,59 @@
     </div>
 
     <div class="panel" id="tab-knowledge" role="tabpanel" hidden>
-      <form id="kbForm" class="row">
-        <input id="kbInput" type="text" placeholder="owner/repo, a GitHub username, or a web address" aria-label="Repository or URL to add" autocomplete="off">
-        <button class="btn" type="submit">Add</button>
-      </form>
-      <div class="row">
-        <button id="kbFiles" class="btn">Add files</button>
-        <button id="kbPaste" class="btn quiet" aria-expanded="false" aria-controls="kbPasteForm">Write a note</button>
-        <button id="kbFolder" class="btn quiet">Add a folder</button>
-        <button id="kbSyncAll" class="btn quiet">Sync all</button>
-        <span class="kb-status" id="kbStatus"></span>
+      <div class="seg" role="tablist" aria-label="What the answers draw on" id="slotTabs">
+        <button role="tab" data-view="about" aria-selected="true">About me</button>
+        <button role="tab" data-view="cv" aria-selected="false">CV</button>
+        <button role="tab" data-view="jd" aria-selected="false">JD</button>
+        <button role="tab" data-view="instructions" aria-selected="false">Instructions</button>
+        <button role="tab" data-view="portfolio" aria-selected="false">Portfolio</button>
+        <button role="tab" data-view="equipped" aria-selected="false">Equipped</button>
       </div>
-<form id="kbPasteForm" class="paste" hidden>
-        <div class="chips" role="group" aria-label="Common notes">
-          <button type="button" class="chip" data-note="About me" data-always="1">About me</button>
-          <button type="button" class="chip" data-note="Instructions" data-always="1">Instructions</button>
-          <button type="button" class="chip" data-note="JD" data-always="1">Job description</button>
-          <button type="button" class="chip" data-note="CV" data-always="0">CV</button>
+
+      <section class="slot" id="slotPanel" role="tabpanel">
+        <p class="slot-what" id="slotWhat"></p>
+        <textarea id="slotText" rows="8"></textarea>
+        <div class="row"><button id="slotSave" class="btn primary" type="button">Save</button><span class="hint" id="slotState"></span></div>
+        <div class="drop" id="slotDrop" role="button" tabindex="0">
+          <strong>Drop files here</strong><span>or click to choose them. PDF, Word, Markdown or text.</span>
         </div>
-        <input id="kbPasteName" type="text" placeholder="Name of the note" aria-label="Name of the note" autocomplete="off">
-        <textarea id="kbPasteText" rows="7" placeholder="Write here, or paste from Word, a web page or anywhere else" aria-label="Text of the note"></textarea>
-        <label class="check"><input id="kbPasteAlways" type="checkbox" checked> Send with every answer</label>
-        <p class="hint" id="kbPasteHint"></p>
-        <div class="row"><button class="btn primary" type="submit">Save note</button><button id="kbPasteCancel" class="btn quiet" type="button">Cancel</button></div>
-      </form>
-      <p class="hint" id="contextPins"></p>
-      <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
-      <ul class="kb-list" id="kbList"></ul>
-      <p class="empty" id="kbEmpty">No sources yet. Add files such as your CV and the job description (or drop them here), a GitHub repository, a username to pull every repo you own, or a URL. Markdown, PDF, Word, code and notebooks are read. Answers quote from what you add here.</p>
-      <form id="kbTry" class="row">
-        <input id="kbTryInput" type="text" placeholder="Try a search to see what an answer would draw on" aria-label="Search your sources" autocomplete="off">
-        <button class="btn quiet" type="submit">Search</button>
-      </form>
-      <ol class="kb-hits" id="kbHits"></ol>
+        <ul class="file-list" id="slotFiles"></ul>
+      </section>
+
+      <section class="slot" id="portfolioPanel" role="tabpanel" hidden>
+        <p class="slot-what">Projects, repositories, reports: anything long. It is searched, and the parts that match a question are used.</p>
+        <form id="kbForm" class="row">
+          <input id="kbInput" type="text" placeholder="owner/repo, a GitHub username, or a web address" aria-label="Repository or web address to add" autocomplete="off">
+          <button class="btn" type="submit">Add</button>
+        </form>
+        <div class="drop" id="portfolioDrop" role="button" tabindex="0">
+          <strong>Drop files or folders here</strong><span>or click to choose files.</span>
+        </div>
+        <div class="row">
+          <button id="kbFolder" class="btn quiet" type="button">Add a folder</button>
+          <button id="kbSyncAll" class="btn quiet" type="button">Sync all now</button>
+          <span class="kb-status" id="kbStatus"></span>
+        </div>
+        <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
+        <ul class="kb-list" id="kbList"></ul>
+        <ul class="file-list" id="portfolioFiles"></ul>
+        <p class="empty" id="kbEmpty">Nothing here yet. Add a GitHub repository, a username to pull every repo you own, your portfolio site, or files and folders.</p>
+      </section>
+
+      <section class="slot" id="equippedPanel" role="tabpanel" hidden>
+        <p class="slot-what" id="eqSummary"></p>
+        <h3>Sent with every answer</h3>
+        <ul class="eq-list" id="eqAlways"></ul>
+        <h3>Searched when a question relates to it</h3>
+        <input id="eqFilter" type="text" placeholder="Filter files by name" aria-label="Filter files by name" autocomplete="off">
+        <div class="eq-sources" id="eqSearched"></div>
+        <h3>Try a question</h3>
+        <form id="kbTry" class="row">
+          <input id="kbTryInput" type="text" placeholder="See which passages a question would pull up" aria-label="Try a question" autocomplete="off">
+          <button class="btn quiet" type="submit">Search</button>
+        </form>
+        <ol class="kb-hits" id="kbHits"></ol>
+      </section>
     </div>
 
     <div class="panel" id="tab-settings" role="tabpanel" hidden>
@@ -118,8 +142,9 @@
         </fieldset>
         <fieldset>
           <legend>Answers</legend>
-          <p class="hint">What the answers draw on (about you, your CV, the job description, instructions) is all under Knowledge.</p>
+          <p class="hint">What the answers draw on (about you, your CV, the job description, instructions, your portfolio) is under Knowledge.</p>
           <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
+          <label>How much is sent with each answer <select id="s-context"><option value="full">Full: all your notes and the best matches</option><option value="lean">Lean: a smaller request, for free plans with tight limits</option></select></label>
           <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
         </fieldset>
         <fieldset>

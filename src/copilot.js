@@ -2,6 +2,7 @@
 const { EventEmitter } = require('events');
 const { detectQuestion } = require('./question');
 const { tokenize } = require('./rag/tokenize');
+const { planPinned } = require('./slots');
 
 // Holds the meeting state (transcript, shared-screen text) and produces
 // answer suggestions. No Electron dependencies, so it can be tested in Node.
@@ -196,18 +197,27 @@ class Copilot extends EventEmitter {
       }
       const [local, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
-      const refs = [...live, ...local].slice(0, 7);
+      const refs = [...live, ...local].slice(0, cfg.answerContext === 'lean' ? 3 : 7);
       this.emit('answer', {
         type: 'sources', id,
         sources: refs.map((r, i) => ({ n: i + 1, title: r.title, path: r.path, url: r.url, snippet: r.text.slice(0, 280) })),
       });
 
-      const messages = this._buildMessages({ asked, mode, refs, cfg });
-      const text = await this.llm.chatStream(messages, {
+      const send = (lean) => this.llm.chatStream(this._buildMessages({ asked, mode, refs, cfg, lean }), {
         signal: ctl.signal,
         maxTokens: cfg.answerLength === 'detailed' ? 1800 : 1000, // headroom for reasoning models; the prompt sets the real length
         onDelta: (piece) => this.emit('answer', { type: 'delta', id, text: piece }),
       });
+      let lean = cfg.answerContext === 'lean';
+      let text;
+      try { text = await send(lean); } catch (e) {
+        // The request was bigger than the service allows at once (free tiers cap tokens per
+        // minute): send a trimmed version rather than no answer.
+        if (lean || ctl.signal.aborted || !/too large|tokens per minute|\bTPM\b|context length|maximum context|request_too_large/i.test(e.message)) throw e;
+        lean = true;
+        this._notice('info', 'That was more than the service accepts in one go, so less of your notes was sent. Choose "Lean" under Settings > Answers to do this every time.');
+        text = await send(true);
+      }
       if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
       this.lastError = '';
       this.emit('answer', { type: 'done', id, text });
@@ -242,7 +252,9 @@ class Copilot extends EventEmitter {
     }
   }
 
-  _buildMessages({ asked, mode, refs, cfg }) {
+  // lean: a smaller request (fewer notes, references and transcript lines).
+  _buildMessages({ asked, mode, refs, cfg, lean = false }) {
+    if (lean) refs = refs.slice(0, 3);
     const detailed = cfg.answerLength === 'detailed';
     const system = [
       'You sit beside the user during a live video meeting and write what they could say next. The user reads your text at a glance while talking, so it must be ready to speak.',
@@ -263,23 +275,17 @@ class Copilot extends EventEmitter {
       '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
     ].join('\n');
 
-    const convo = this.entries.filter(e => !e.pending).slice(-14)
+    const convo = this.entries.filter(e => !e.pending).slice(lean ? -6 : -14)
       .map(e => `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`).join('\n');
     const parts = [];
-    // Pinned notes from the sources (a job description file, a short bio) ride along with every answer.
-    let room = 9000;
-    const notes = [];
-    for (const n of (this.kb.pinned ? this.kb.pinned() : [])) {
-      if (room < 200) break;
-      const text = n.text.slice(0, room);
-      notes.push(`### ${n.title} (${n.path})\n${text}`);
-      room -= text.length;
-    }
-    if (notes.length) parts.push(`Pinned notes from my sources (always included; may be a job description, agenda or instructions for this meeting, or notes about me):\n${notes.join('\n\n')}`);
+    // Notes sent with every answer: About me, CV, JD, Instructions, then pinned files from other sources.
+    const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], lean ? { total: 6000, perNote: 2500 } : undefined)
+      .filter(n => n.sent > 0).map(n => `### ${n.title}\n${n.text.slice(0, n.sent)}`);
+    if (notes.length) parts.push(`Pinned notes from my sources (always included: who I am, my CV, the job description, instructions for this meeting):\n${notes.join('\n\n')}`);
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
-    if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? 5000 : 1800)}`);
+    if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     if (refs.length) {
-      parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, 1500)}`).join('\n\n'));
+      parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, lean ? 800 : 1500)}`).join('\n\n'));
     } else parts.push('Reference material: none found for this question.');
     parts.push(mode === 'screen'
       ? `What I need: ${asked}\nBase the reply on the shared-screen text above. It is raw OCR of the whole screen, so ignore menus, toolbars, participant names and other clutter, and repair obvious OCR slips in names and code.`

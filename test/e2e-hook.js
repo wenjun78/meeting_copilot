@@ -65,57 +65,82 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const v2 = versionNow();
     step('background refresh', { unchangedKept: v1 === v0, pushPickedUp: v2 !== v1 });
     if (v1 !== v0 || v2 === v1) throw new Error('background refresh did not behave as expected');
-    await js(`document.querySelector('[data-tab=knowledge]').click()`);
-    await waitFor('kb list', () => js(`document.querySelectorAll('#kbList li').length === 1`));
-
-    // A GitHub Pages address typed into the Add box is read as the repository behind the site.
-    const viaPages = await js(`window.mc.call('kb:add', 'https://wj.github.io/etl-pipeline/')`);
-    step('pages address', { ok: viaPages.ok, error: viaPages.error, added: viaPages.value, sources: Object.keys(kb.sources) });
-    if (!viaPages.ok || Object.keys(kb.sources).join() !== 'github:wj/etl-pipeline') throw new Error('a GitHub Pages address was not resolved to its repository');
-
-    // Files handed to the app directly: copied into its own folder, indexed, and pinned by name.
+    // ---- Knowledge: sections are the way in ----
     const os = require('os');
+    await js(`document.querySelector('[data-tab=knowledge]').click()`);
+    const selected = () => js(`[...document.querySelectorAll('#slotTabs button[aria-selected=true]')].map(b => b.dataset.view)`);
+    const openSection = async (name) => {
+      await js(`document.querySelector('#slotTabs [data-view=${name}]').click()`);
+      await waitFor(`section ${name}`, async () => (await selected()).join() === name);
+      await new Promise(r => setTimeout(r, 250));
+    };
+    await waitFor('about section', async () => (await selected()).join() === 'about' && !(await js(`document.getElementById('slotPanel').hidden`)));
+
+    // Typing in one section never shows up in another, and leaving a section saves it.
+    await js(`(() => { const t = document.getElementById('slotText'); t.value = 'I am a data engineer in Kuala Lumpur.'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await openSection('instructions');
+    const carried = await js(`document.getElementById('slotText').value`);
+    await js(`(() => { const t = document.getElementById('slotText'); t.value = 'Be professional when answering.'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await openSection('jd');
+    const jdText = await js(`document.getElementById('slotText').value`);
+    await openSection('about');
+    const aboutBack = await js(`document.getElementById('slotText').value`);
+    step('switching sections', { instructionsStartedEmpty: carried === '', jdStartedEmpty: jdText === '', aboutKept: aboutBack, oneSelected: await selected() });
+    if (carried !== '' || jdText !== '' || aboutBack !== 'I am a data engineer in Kuala Lumpur.') throw new Error('text carried over between sections or was not saved on switch');
+
+    // Files go into the section they are added to; unreadable types are refused by name.
     const drop = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-drop-'));
-    fs.writeFileSync(path.join(drop, 'JD - Platform Engineer.md'), '# Platform Engineer\n\nMust have Terraform and on-call experience.');
     fs.copyFileSync(path.join(__dirname, 'fixtures', 'sample-cv.docx'), path.join(drop, 'my cv.docx'));
     fs.writeFileSync(path.join(drop, 'photo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0]));
-    const addedFiles = await js(`window.mc.call('kb:addFiles', ${JSON.stringify(fs.readdirSync(drop).map(f => path.join(drop, f)))})`);
-    await waitFor('my files listed', () => js(`[...document.querySelectorAll('#kbList .label')].some(n => n.textContent === 'My files')`));
-    fs.rmSync(drop, { recursive: true, force: true }); // the app keeps its own copies
-    const mine = Object.values(kb.sources).find(x => x.label === 'My files');
-    step('files added to the app', { result: addedFiles.value, pinned: mine && mine.pinned.map(p => p.path), found: kb.search('XLM-RoBERTa ticket routing', 4).some(h => h.path.endsWith('my cv.docx')) });
-    if (!mine || mine.files !== 2 || mine.pinned.length !== 1 || addedFiles.value.skipped[0] !== 'photo.png') throw new Error('adding files did not behave as expected');
+    fs.writeFileSync(path.join(drop, 'role.md'), '# Platform Engineer\n\nMust have Terraform and on-call experience.');
+    await openSection('cv');
+    const cvAdd = await js(`window.mc.call('slot:addFiles', 'cv', ${JSON.stringify([path.join(drop, 'my cv.docx'), path.join(drop, 'photo.png')])})`);
+    const jdAdd = await js(`window.mc.call('slot:addFiles', 'jd', ${JSON.stringify([path.join(drop, 'role.md')])})`);
+    await openSection('cv');
+    const cvFiles = await js(`[...document.querySelectorAll('#slotFiles .name')].map(n => n.textContent)`);
+    await shot('2a-cv-section');
+    step('files in sections', { cvAdded: cvAdd.value.added, skipped: cvAdd.value.skipped, jdAdded: jdAdd.value.added, cvFilesShown: cvFiles });
+    if (cvFiles.join() !== 'my cv.docx' || cvAdd.value.skipped.join() !== 'photo.png' || jdAdd.value.added.join() !== 'role.md') throw new Error('adding files to a section did not behave as expected');
 
-    // Pasted text becomes a note in the same place; pasting under the same name replaces it.
-    await js(`document.getElementById('kbPaste').click()`);
-    await js(`(() => { document.getElementById('kbPasteName').value = 'Interview instructions: round 2?'; document.getElementById('kbPasteText').value = 'Keep answers short. Mention the Zanzibar migration project.'; document.getElementById('kbPasteForm').requestSubmit(); })()`);
-    await waitFor('pasted note saved', () => js(`document.getElementById('kbPasteForm').hidden && [...document.querySelectorAll('.toast')].some(t => /Saved/.test(t.textContent))`));
-    const second = await js(`window.mc.call('kb:addText', { name: 'Interview instructions: round 2?', text: 'Keep answers short. Mention the Kilimanjaro migration project.' })`);
-    const mine2 = Object.values(kb.sources).find(x => x.label === 'My files');
-    step('pasted text', { file: second.value.file, replaced: second.value.replaced, files: mine2.files, pinned: mine2.pinned.map(p => p.path), current: kb.search('Kilimanjaro migration', 2).length > 0, old: kb.search('Zanzibar', 2).length });
-    if (mine2.files !== 3 || !second.value.replaced || mine2.pinned.length !== 2 || kb.search('Zanzibar', 2).length) throw new Error('pasting text did not behave as expected');
+    // Portfolio: a repository by its GitHub Pages address, a dropped folder, a loose file.
+    await openSection('portfolio');
+    const viaPages = await js(`window.mc.call('kb:add', 'https://wj.github.io/etl-pipeline/')`);
+    const folder = path.join(drop, 'side-project');
+    fs.mkdirSync(folder); fs.writeFileSync(path.join(folder, 'notes.md'), '# Serengeti rollout\n\nRolled out to nine regions.');
+    fs.writeFileSync(path.join(drop, 'talk.md'), '# Conference talk\n\nSpoke about feature stores.');
+    const pfAdd = await js(`window.mc.call('slot:addFiles', 'portfolio', ${JSON.stringify([folder, path.join(drop, 'talk.md')])})`);
+    await openSection('portfolio');
+    await waitFor('portfolio lists', () => js(`document.querySelectorAll('#kbList li').length === 2 && document.querySelectorAll('#portfolioFiles li').length === 1`));
+    step('portfolio', { pages: viaPages.ok, sources: await js(`[...document.querySelectorAll('#kbList .label')].map(n => n.textContent)`), files: await js(`[...document.querySelectorAll('#portfolioFiles .name')].map(n => n.textContent)`), added: pfAdd.value.added, folders: pfAdd.value.folders });
+    await shot('2b-portfolio');
 
-    // The note form: "About me" rides along with every answer, a CV is searched instead,
-    // any note can be marked to ride along, and an existing note opens for editing.
-    await js(`document.getElementById('kbPaste').click()`);
-    await js(`document.querySelector('.chip[data-note="About me"]').click()`);
-    await waitFor('about me ready', () => js(`document.getElementById('kbPasteName').value === 'About me' && document.getElementById('kbPasteAlways').disabled && document.getElementById('kbPasteAlways').checked`));
-    await js(`document.getElementById('kbPasteText').value = 'I am a data engineer in Kuala Lumpur.'`);
-    await new Promise(r => setTimeout(r, 200));
-    await shot('2b-note-form');
-    await js(`document.getElementById('kbPasteForm').requestSubmit()`);
-    await waitFor('about me saved', () => kb.pinned().some(p => /About me\.md$/.test(p.path)));
-    const cv = await js(`window.mc.call('kb:addText', { name: 'CV', text: 'Ten years of experience with Fortran.', always: false })`);
-    const custom = await js(`window.mc.call('kb:addText', { name: 'Talking points', text: 'Mention the Serengeti rollout.', always: true })`);
-    const reopened = await js(`window.mc.call('kb:noteInfo', 'Talking points')`);
-    const pinnedNames = kb.pinned().map(p => path.basename(p.path));
-    step('note form', { pinned: pinnedNames, cvAlways: cv.value.always, customAlways: custom.value.always, reopened: reopened.value });
-    if (!pinnedNames.includes('About me.md') || !pinnedNames.includes('Talking points.md') || pinnedNames.includes('CV.md')
-      || reopened.value.text !== 'Mention the Serengeti rollout.' || !reopened.value.always || !kb.search('Fortran', 2).length) throw new Error('the note form did not behave as expected');
+    // Equipped: what goes with every answer, and every searchable file.
+    await openSection('equipped');
+    await waitFor('equipped lists', () => js(`document.querySelectorAll('#eqAlways details').length >= 4 && document.querySelectorAll('#eqSearched > details').length >= 2`));
+    const always = await js(`[...document.querySelectorAll('#eqAlways summary b')].map(n => n.textContent)`);
+    await js(`document.querySelector('#eqAlways details').open = true`);
+    await waitFor('note text shown', () => js(`/data engineer in Kuala Lumpur/.test(document.querySelector('#eqAlways .preview-text').textContent)`));
+    await js(`(() => { const f = document.getElementById('eqFilter'); f.value = 'dedupe'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await waitFor('filter applied', () => js(`document.querySelectorAll('#eqSearched li').length === 1`));
+    const filtered = await js(`[...document.querySelectorAll('#eqSearched li summary b')].map(n => n.textContent)`);
+    await js(`(() => { const f = document.getElementById('eqFilter'); f.value = ''; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
     await js(`(async () => { document.getElementById('kbTryInput').value = 'fuzzy match threshold'; document.getElementById('kbTry').requestSubmit(); })()`);
     await waitFor('kb hits', () => js(`document.querySelectorAll('#kbHits li b').length > 0`));
-    step('kb search', { top: await js(`document.querySelector('#kbHits li b').textContent`) });
-    await shot('2-knowledge');
+    step('equipped', { summary: await js(`document.getElementById('eqSummary').textContent`), always, filtered, searchTop: await js(`document.querySelector('#kbHits li b').textContent`) });
+    const expectAlways = ['About me', 'CV: my cv.docx', 'Job description: role.md', 'Instructions for this meeting'];
+    if (expectAlways.some(t => !always.includes(t))) throw new Error('Equipped does not list the notes sent with every answer: ' + always.join(' | '));
+    await new Promise(r => setTimeout(r, 300));
+    await shot('2c-equipped');
+    fs.rmSync(drop, { recursive: true, force: true }); // the app keeps its own copies of files; the folder source simply empties
+
+    // The window can stop staying on top, and say so.
+    const before = win.isAlwaysOnTop();
+    await js(`document.getElementById('onTop').click()`);
+    await waitFor('not on top', () => !win.isAlwaysOnTop());
+    await js(`document.getElementById('onTop').click()`);
+    await waitFor('on top again', () => win.isAlwaysOnTop());
+    step('stay on top', { before, toggledOff: true, backOn: win.isAlwaysOnTop() });
+
 
     // Route "their audio" to a fake input device (stands in for a loopback device).
     const devices = await js(`navigator.mediaDevices.getUserMedia({audio:true}).then(s => { s.getTracks().forEach(t=>t.stop()); return navigator.mediaDevices.enumerateDevices(); }).then(d => d.filter(x => x.kind==='audioinput').map(x => ({id:x.deviceId,label:x.label})))`);

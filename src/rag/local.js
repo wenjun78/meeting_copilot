@@ -4,6 +4,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { readNote, isIndexable } = require('./chunker');
 const { extractText } = require('./extract');
+const { NOTE, slotByDir } = require('../slots');
 
 function walk(dir, root, out, limit) {
   let entries;
@@ -17,7 +18,9 @@ function walk(dir, root, out, limit) {
   }
 }
 
-async function ingestFolder(folder, { maxFiles = 2000 } = {}) {
+// sections: the folder is the app's own files, laid out as one folder per section. Files in
+// a section are named after it and, outside Portfolio, sent with every answer.
+async function ingestFolder(folder, { maxFiles = 2000, sections = false } = {}) {
   const stat = fs.statSync(folder);
   const root = stat.isDirectory() ? folder : path.dirname(folder);
   const list = [];
@@ -32,10 +35,19 @@ async function ingestFolder(folder, { maxFiles = 2000 } = {}) {
     const text = await extractText(f.rel, fs.readFileSync(f.full));
     if (!text.trim()) { skipped++; continue; }
     files++; bytes += st.size; newest = Math.max(newest, st.mtimeMs);
-    const note = readNote(f.rel, text);
-    const shown = `${path.basename(root)}/${f.rel}`, url = pathToFileURL(f.full).href;
+    const parts = f.rel.split('/');
+    const slot = sections && parts.length > 1 ? slotByDir(parts[0]) : null;
+    const url = pathToFileURL(f.full).href;
+    let shown = `${path.basename(root)}/${f.rel}`, opts = {}, typed = false;
+    if (slot) {
+      typed = parts.length === 2 && parts[1] === NOTE;
+      const fileName = parts.slice(1).join('/');
+      shown = `${slot.label}/${typed ? 'typed text' : fileName}`;
+      opts = { pin: !slot.searched, name: typed ? slot.title : parts[parts.length - 1], title: typed ? slot.title : `${slot.title}: ${parts[parts.length - 1]}` };
+    }
+    const note = readNote(f.rel, text, opts);
     for (const c of note.chunks) chunks.push({ path: shown, url, title: c.title, text: c.text });
-    if (note.pinned) pinned.push({ path: shown, url, ...note.pinned });
+    if (note.pinned) pinned.push({ path: shown, url, ...note.pinned, ...(slot ? { slot: slot.id } : {}), ...(typed ? { typed: true } : {}) });
   }
   // Same files, same sizes, nothing modified since -> same version.
   return { id: `folder:${folder}`, label: folder, url: '', version: `${files}:${bytes}:${Math.round(newest)}`, chunks, pinned, files, skipped };

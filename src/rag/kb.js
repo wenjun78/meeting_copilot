@@ -129,7 +129,25 @@ class KnowledgeBase {
 
   // Notes that go to the model with every answer: [{path, url, title, text}]
   pinned() {
-    return Object.values(this.sources).flatMap(s => s.pinned || []);
+    return Object.values(this.sources).flatMap(s => (s.pinned || []).map(p => ({ ...p, sourceId: s.id })));
+  }
+
+  // Every file that can be searched, grouped by source: [{id, label, files:[{path, passages, chars}]}]
+  inventory() {
+    const bySource = new Map();
+    for (const c of this.chunks) {
+      let files = bySource.get(c.sourceId);
+      if (!files) bySource.set(c.sourceId, (files = new Map()));
+      const f = files.get(c.path) || { path: c.path, passages: 0, chars: 0 };
+      f.passages++; f.chars += c.text.length;
+      files.set(c.path, f);
+    }
+    return [...bySource].map(([id, files]) => ({ id, label: (this.sources[id] || {}).label || id, files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)) }));
+  }
+
+  // The text of one file as it was read, passages joined in order.
+  fileText(sourceId, filePath) {
+    return this.chunks.filter(c => c.sourceId === sourceId && c.path === filePath).map(c => c.text).join('\n\n');
   }
 
   stats() {

@@ -152,11 +152,42 @@ input.keys:focus { border-color: var(--them); }
 .preview { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--rule); flex: none; }
 .screen-text { margin: 0; white-space: pre-wrap; font: 12px/1.5 var(--ui); color: var(--text); user-select: text; }
 
-.paste { display: flex; flex-direction: column; gap: 6px; flex: none; padding: 9px; border: 1px solid var(--rule); border-radius: 8px; background: var(--shell-2); }
-.paste input, .paste textarea { background: var(--shell); }
-.chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.chip { border: 1px solid var(--rule); background: transparent; color: var(--muted); border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
-.chip:hover, .chip[aria-pressed="true"] { color: var(--text); border-color: var(--them); }
+/* Knowledge: sections first. The selected section is filled; every other control is quiet,
+   so nothing else reads as "selected". */
+.seg { display: flex; flex-wrap: wrap; gap: 3px; flex: none; }
+.seg button { border: 1px solid var(--rule); background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 8px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.seg button:hover { color: var(--text); border-color: var(--muted); }
+.seg button[aria-selected="true"] { background: var(--them); border-color: var(--them); color: var(--ink); font-weight: 600; }
+.slot { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.slot-what { margin: 0; color: var(--muted); }
+.slot h3 { margin: 8px 0 0; font-size: 13px; font-weight: 600; }
+.slot textarea { min-height: 120px; }
+.slot .row { align-items: center; }
+.drop { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px; text-align: center; cursor: pointer;
+  border: 1px dashed var(--rule); border-radius: 8px; color: var(--muted); font-size: 12px; }
+.drop strong { color: var(--text); font-weight: 600; font-size: 13px; }
+.drop:hover, .drop.over { border-color: var(--them); background: var(--shell-2); }
+.drop.over strong { color: var(--them); }
+.file-list, .eq-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.file-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 4px 5px 9px; background: var(--shell-2); border-radius: 6px; }
+.file-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-list .size { color: var(--muted); font-size: 11.5px; }
+.file-list .btn, .eq-list .btn { padding: 2px 8px; font-size: 12px; }
+.eq-list li, .eq-sources details { background: var(--shell-2); border-radius: 6px; }
+.eq-list details > summary, .eq-sources summary { display: flex; gap: 8px; align-items: baseline; padding: 6px 9px; cursor: pointer; list-style: none; }
+.eq-list summary::-webkit-details-marker, .eq-sources summary::-webkit-details-marker { display: none; }
+.eq-list summary b, .eq-sources summary b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eq-list summary span, .eq-sources summary span { margin-left: auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.eq-list summary .cut { color: var(--them); }
+.eq-sources { display: flex; flex-direction: column; gap: 4px; }
+.eq-sources ul { list-style: none; margin: 0; padding: 0 6px 6px; display: flex; flex-direction: column; gap: 2px; }
+.eq-sources li details { background: var(--shell); }
+.eq-sources li summary { padding: 4px 8px; font-size: 12.5px; }
+.eq-sources li summary b { font-weight: 400; }
+.preview-text { margin: 0; padding: 8px 10px 10px; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--ui); color: var(--text); user-select: text; max-height: 260px; overflow-y: auto; border-top: 1px solid var(--rule); }
+.icon .i-restore { display: none; }
+.maximized .icon .i-restore { display: block; }
+.maximized .icon .i-max { display: none; }
 .kb-status { color: var(--muted); font-size: 12px; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-list, .kb-hits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .kb-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 6px; align-items: center; padding: 6px 4px 6px 9px; border-left: 2px solid var(--rule); background: var(--shell-2); border-radius: 0 6px 6px 0; }
@@ -199,6 +230,10 @@ input[type="checkbox"] { accent-color: var(--them); width: 15px; height: 15px; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--shell-3); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
 .card::-webkit-scrollbar-thumb { background: rgba(23, 34, 43, 0.25); background-clip: padding-box; }
+
+/* Setting up (Knowledge or Settings open, nothing to answer yet): the empty answer area steps aside. */
+.setup .cue { display: none; }
+.setup .lower { border-top: 0; }
 
 /* Compact: the bar and the answer, nothing else. */
 .compact .lower, .compact .ask, .compact .cue-actions #answerScreen, .compact .meters { display: none; }

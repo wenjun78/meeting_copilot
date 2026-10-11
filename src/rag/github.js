@@ -75,7 +75,7 @@ async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.
   const gz = Buffer.from(await res.arrayBuffer());
   const chunks = [], pinned = [];
   let files = 0, skipped = 0;
-  if (description) chunks.push({ path: '', url: htmlUrl, title: `${owner}/${repo} — description`, text: `${owner}/${repo}: ${description}` });
+  if (description) chunks.push({ path: `${repo}/(repository description)`, url: htmlUrl, title: `${owner}/${repo} — description`, text: `${owner}/${repo}: ${description}` });
   for (const entry of readTarGz(gz)) {
     const path = entry.path.split('/').slice(1).join('/'); // strip "owner-repo-sha/"
     if (!path) continue;

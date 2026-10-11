@@ -98,6 +98,29 @@ small or low-contrast text can come out garbled (check the Screen tab); and
 this app's own window is blanked out of the capture so it never reads its
 own answers.
 
+## Which model service
+
+| | Groq, free plan | Groq, pay as you go | OpenAI |
+|---|---|---|---|
+| Cost for a one-hour meeting | Free | About US$0.30 | About US$1.50 to 2 |
+| Card needed | No | Yes | Yes |
+| Good for | Trying the app | Real meetings: fast and cheap | Real meetings: strongest answers |
+| Catch | About 8,000 tokens a minute and 200,000 a day for answers, so roughly one answer a minute and about 25 to 60 a day | | Slower to answer; no free plan |
+
+Figures are estimates from the providers' published prices and limits in
+October 2026 (third-party summaries for Groq) and assume about 30 answers.
+On the free plan choose "Lean" under Settings > Answers; the app also falls
+back to it when a request is refused as too large.
+
+## Window
+
+The pin button in the title bar turns "stay on top of other windows" on or
+off. The square button maximises and, pressed again, restores down.
+
+Windows shows a "Windows protected your PC" warning the first time, because
+the installer is not signed with a paid code-signing certificate; it is not a
+virus detection. Choose "More info", then "Run anyway".
+
 ## Hearing the other side
 
 | System | How "Them" is captured |
@@ -109,75 +132,52 @@ own answers.
 Use headphones. With speakers, your microphone also hears the other side;
 duplicates are filtered, but headphones give a cleaner transcript.
 
-## Knowledge sources
+## What the answers draw on
 
-- **Files**: press "Add files" in the Knowledge tab, or drop files or folders
-  onto the window. Files are copied into the app's own folder, so they keep
-  working if the originals move; "Open" on the "My files" row shows that
-  folder for editing or deleting.
-- **Notes**: "Write a note" in the Knowledge tab saves what you type or paste
-  (from Word, a web page, an email). Tick "Send with every answer" for
-  instructions and who you are; leave it off for long material that should
-  be searched. Choosing a name that exists opens that note for editing.
+Everything lives in the **Knowledge** tab, organised by what it is:
 
-- **GitHub**: one request downloads the repository; Markdown, notebooks
-  (outputs stripped), code, config, **PDF and Word (.docx)** files are split
-  into passages. Add a token in Settings for private repos. GitHub
-  Enterprise: set the API URL.
-- **Your CV**: commit it to a repo as PDF, Word or Markdown and add that repo.
-  Scanned PDFs (pictures of pages) have no text to read; export from Word or
-  Google Docs instead. In a public repo the CV is public: use a private repo
-  and a token if it has your phone number or address.
-- **URL**: a JSON array or `{results|data|items: [...]}` becomes one passage
-  per record; HTML and Markdown are split by heading; a link to a PDF or Word
-  file is read as a document.
-- **A portfolio site on GitHub Pages**: paste its address
-  (`https://you.github.io/portfolio/`) or type `you/portfolio`. Either way
-  the repository behind the site is read, so every page, notebook and
-  exported report is covered, not only the front page. Large HTML reports
-  with embedded charts are fine: only their text is kept.
-- **LinkedIn**: LinkedIn does not let apps read profiles. On your profile
-  choose More > Save to PDF and add that file; repeat when the profile
-  changes.
-- **Folder**: any folder on your computer, same file types.
+| Section | What goes in it | How it is used |
+|---|---|---|
+| About me | Who you are, strengths, goals, how you like to sound | Sent with every answer |
+| CV | Your CV: paste it or add the PDF/Word file | Sent with every answer |
+| JD | The job description, agenda or brief for this meeting | Sent with every answer |
+| Instructions | Tone, length, what to stress or avoid | Sent with every answer |
+| Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
+| Equipped | Nothing to fill in: it shows what the above adds up to | |
+
+Each section takes typed or pasted text, files chosen with a click, and
+files dropped onto it. Switching sections saves what you typed. Files are
+copied into the app's own folder, so they keep working if the originals move.
+
+**Sent with every answer** has a budget: the first 8,000 characters of each
+note or file, 20,000 in total, in the order About me, CV, JD, Instructions.
+Anything longer is still searched. **Equipped** shows exactly how much of
+each note goes out, lists every searchable file with its passages, opens any
+of them to show the text as the app read it, and lets you try a question.
+
+**Portfolio** accepts:
+
+- **GitHub**: `owner/repo`, a username (every repo that user owns), or a
+  GitHub Pages address such as `https://you.github.io/portfolio/`, which is
+  read as the repository behind it. Markdown, notebooks (outputs stripped),
+  code, config, PDF, Word and exported HTML reports are split into passages.
+  Add a token in Settings for private repos.
+- **Files and folders**: dropped or chosen. A dropped folder stays in step
+  with the folder on disk.
+- **A web address**: a page, a PDF, or JSON (`[...]` or
+  `{results|data|items: [...]}`, one passage per record).
 - **Your search API**: set a URL such as `https://host/search?q={query}` in
-  Settings and it is called for every answer (2.5 s limit), with its results
-  ranked first. Records are read from `text`, `content`, `body`, `answer`,
-  `snippet` or `description`.
-- Retrieval is keyword-based (BM25) and works offline once synced. Set an
-  embedding model under Advanced to add meaning-based matching.
+  Settings and it is asked live for every answer (2.5 s limit).
+- **LinkedIn** cannot be read by apps. On your profile choose More > Save to
+  PDF and add that file to CV or Portfolio.
 
-### The meeting itself: job description, agenda, instructions
+A job description is treated as what the other side wants, never as your
+experience. Markdown gives the cleanest results (`##` headings become
+passages); PDF and Word are read too, though multi-column layouts can come
+out jumbled, and scanned PDFs have no text to read.
 
-Everything you give the app lives in one place, the Knowledge tab. Most of it
-is searched per question. A few notes are instead sent to the model with
-**every** answer, so replies lead with what the role or agenda asks for:
-
-- a note you ticked "Send with every answer" for when writing it, or
-- a note or file whose name contains `about me`, `bio`, `jd`,
-  `job description`, `instructions`, `agenda` or `brief` as a word (`JD - Data Engineer.pdf`,
-  `interview instructions`), or
-- any Markdown note whose first lines are
-
-  ```
-  ---
-  title: About me
-  pinned: true
-  ---
-  ```
-
-A job description is treated as what the other side wants, not as your
-experience. Replace the note before each different meeting. The Knowledge
-tab shows which notes are sent with every answer.
-
-Who you are goes here too: "Write a note" > About me. Settings holds only
-how the app runs (keys, models, audio, shortcuts).
-
-**Writing notes.** Markdown works best for a CV and a job description: each
-`##` heading becomes its own searchable passage, a leading `---` block is
-read as settings rather than content, and changes show up as readable diffs.
-PDF and Word are read too, but multi-column layouts can come out in a jumbled
-order.
+Retrieval is keyword-based and works offline once synced. Set an embedding
+model under Settings > More to add meaning-based matching.
 
 ### Staying up to date
 
