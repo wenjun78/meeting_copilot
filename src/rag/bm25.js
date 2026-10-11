@@ -35,7 +35,7 @@ class BM25 {
     if (!this.n) return [];
     const scores = new Map();
     const seen = new Set();
-    for (const t of tokenize(query)) {
+    for (const t of tokenize(query, { question: true })) {
       if (seen.has(t)) continue; seen.add(t);
       const p = this.postings.get(t);
       if (!p) continue;

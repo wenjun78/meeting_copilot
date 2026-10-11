@@ -200,7 +200,7 @@ class Copilot extends EventEmitter {
       }
       const [local, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
-      const refs = [...live, ...local].slice(0, cfg.answerContext === 'lean' ? 3 : 7);
+      const refs = [...live, ...local].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
       this.emit('answer', {
         type: 'sources', id,
         sources: refs.map((r, i) => ({ n: i + 1, title: r.title, path: r.path, url: r.url, snippet: r.text.slice(0, 280) })),
@@ -245,7 +245,7 @@ class Copilot extends EventEmitter {
         vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
       } catch { /* fall back to keyword search */ }
     }
-    return this.kb.search(query, 6, vec);
+    return this.kb.search(query, 8, vec);
   }
 
   async _searchLive(query, cfg) {
@@ -271,6 +271,7 @@ class Copilot extends EventEmitter {
       '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named, then one or two spoken sentences on how it works, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
       'Grounding:',
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
+      '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
       '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',

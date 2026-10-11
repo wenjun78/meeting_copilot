@@ -17,7 +17,7 @@ const { ConfigStore } = require('../src/config');
 const { SLOTS, NOTE, planPinned, moveLooseFilesIntoSections } = require('../src/slots');
 const { Copilot } = require('../src/copilot');
 const { cleanOcrText } = require('../src/ocr');
-const { describe: describeDoc } = require('../src/rag/extract');
+const { describe: describeDoc, sectionize } = require('../src/rag/extract');
 const shortcuts = require('../src/shortcuts');
 
 let srv;
@@ -730,9 +730,24 @@ test('a paper saved under a meaningless file name is read, named by its title an
   kb.boost = { [mine.id]: 1.5 };
   const hits = kb.search('Tell me about your publication', 4);
   assert.match(hits[0].title, /^Publication \(research paper\): Predicting shipment delays/);
-  assert.match(kb.search('What F1 score did your paper reach and how did you interpret the model?', 3)[0].text, /0\.81 F1|SHAP/);
+  assert.match(kb.search('What F1 score did your paper reach and how did you interpret the model?', 3)[0].text, /F1 score of 0\.81|SHAP/);
+  // "Methodology" brings back the parts of the Methods section with their specifics, and the
+  // reference list (other people's work) is not kept.
+  for (const q of ['i mean publication methodology', 'walk me through the approach of your paper']) {
+    const got = kb.search(q, 8).filter(h => h.sourceId === mine.id);
+    assert.ok(got.some(h => / — Methods > Model$/.test(h.title) && /XGBoost[\s\S]*SMOTE/.test(h.text)), q);
+    assert.ok(got.some(h => / — Methods > Data$/.test(h.title) && /48,210/.test(h.text)), q);
+  }
+  assert.match(kb.search('what are the limitations of your paper', 3)[0].title, / — Limitations$/);
+  assert.ok(!mine.chunks.some(c => /Lundberg|Guestrin/.test(c.text)), 'references left out');
   assert.deepEqual(kb.fileFacts(mine.id, `Portfolio/${file}`), { passages: mine.chunks.length, title: mine.chunks[0].title });
   assert.equal(kb.fileFacts(mine.id, 'Portfolio/scan.pdf').passages, 0);
+
+  // Section headings of numbered papers, and of a CV, on their own.
+  const numbered = sectionize('A study\nAbstract\nShort.\n1 Introduction\nWhy.\n2 Methodology\n2.1 Feature engineering\nLagged delays.\n2.2 Model training\nLightGBM.\n3 Results\nGood.\nReferences\n[1] Other.', true);
+  assert.match(numbered, /^## 2 Methodology\n\n### 2\.1 Feature engineering\n\nLagged delays\.\n\n### 2\.2 Model training/m);
+  assert.ok(!/Other/.test(numbered));
+  assert.match(sectionize('Alex Tan\nWork experience\n1. Built pipelines at Acme\nEducation\nBSc', false), /## Work experience\n\n1\. Built pipelines at Acme\n\n## Education/);
 
   // Naming rules on their own.
   const paper = 'Journal of Things\nORIGINAL PAPER\nDeep learning for\nwidget inspection\nA. Author · B. Writer\nAbstract\nWe study widgets. https://doi.org/10.1/x\n' + 'text '.repeat(50) + '\nReferences\n[1] Someone.';

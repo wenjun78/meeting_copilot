@@ -380,6 +380,9 @@ function wireIpc() {
     if (/^https?:\/\/([\w-]+\.)?linkedin\.com\//i.test(spec)) {
       throw new Error('LinkedIn does not let apps read profiles. On your profile choose More > Save to PDF, then add that file with "Add files".');
     }
+    if (/^https?:\/\/([\w-]+\.)?(researchgate\.net|academia\.edu)\//i.test(spec)) {
+      throw new Error('That site does not let apps read its pages. Download the PDF of the paper and add the file here instead.');
+    }
     const pagesSite = /^https?:\/\/[\w-]+\.github\.io(\/|$)/i.test(spec);
     const isUrl = /^https?:\/\//i.test(spec) && !pagesSite && !/^https?:\/\/(www\.)?github\.com\//i.test(spec);
     if (pagesSite) {

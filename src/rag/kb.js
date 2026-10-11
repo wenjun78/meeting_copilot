@@ -118,16 +118,38 @@ class KnowledgeBase {
       add(lexical); add(sem.slice(0, 30));
       ranked = [...fused].sort((a, b) => b[1] - a[1]).map(([index, score]) => ({ index, score }));
     }
-    // Keep at most two chunks per file so one long README cannot crowd out the rest.
-    const perFile = new Map(), out = [];
+    // At most two passages per file, so one long README cannot crowd out the rest; the file
+    // of the best match may give up to five, because the question is most likely about it.
+    // Which parts of that file is decided within the file: there, the words every passage of
+    // it shares (its title, "publication") count for nothing and the section asked about wins.
+    const perFile = new Map(), out = [], taken = new Set();
+    const keyOf = (c) => c.sourceId + '|' + c.path;
+    const take = (index, score) => {
+      const c = this.chunks[index];
+      taken.add(index);
+      perFile.set(keyOf(c), (perFile.get(keyOf(c)) || 0) + 1);
+      out.push({ sourceId: c.sourceId, path: c.path, url: c.url, title: c.title, text: c.text, score });
+    };
+    const top = ranked.length ? keyOf(this.chunks[ranked[0].index]) : '';
+    if (top) {
+      take(ranked[0].index, ranked[0].score);
+      const own = [];
+      this.chunks.forEach((c, i) => { if (keyOf(c) === top) own.push(i); });
+      if (own.length > 2) {
+        const local = new BM25(own.map(i => this.chunks[i])).search(query, 4);
+        const best = local.length ? local[0].score : 0;
+        for (const r of local) {
+          if (out.length >= Math.min(k, 4) || r.score < best * 0.35) break;
+          if (!taken.has(own[r.index])) take(own[r.index], ranked[0].score);
+        }
+      }
+    }
     for (const r of ranked) {
-      const c = this.chunks[r.index];
-      const key = c.sourceId + '|' + c.path;
-      const n = perFile.get(key) || 0;
-      if (n >= 2) continue;
-      perFile.set(key, n + 1);
-      out.push({ sourceId: c.sourceId, path: c.path, url: c.url, title: c.title, text: c.text, score: r.score });
       if (out.length >= k) break;
+      if (taken.has(r.index)) continue;
+      const key = keyOf(this.chunks[r.index]);
+      if ((perFile.get(key) || 0) >= (key === top ? 5 : 2)) continue;
+      take(r.index, r.score);
     }
     return out;
   }
