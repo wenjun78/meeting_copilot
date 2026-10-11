@@ -225,7 +225,7 @@ class Copilot extends EventEmitter {
       this.lastError = '';
       // Remembered so a follow-up ("make it shorter", "and the second point?") has something to refer to.
       this.history.push({ mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
-      if (this.history.length > 8) this.history.shift();
+      if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
     } catch (e) {
@@ -293,9 +293,20 @@ class Copilot extends EventEmitter {
       if (room <= 0) break;
     }
     const convo = spoken.join('\n');
-    // What was already asked and suggested, so answers build on each other instead of starting over.
-    const earlier = this.history.slice(lean ? -1 : -4)
-      .map(h => `Asked: ${h.question.slice(0, 300)}\nSuggested: ${h.answer.slice(0, lean ? 400 : 700)}`).join('\n\n');
+    // What was already asked and suggested, so answers build on each other instead of starting
+    // over: as many exchanges as fit, newest first. The latest four keep most of their answer,
+    // older ones a shorter cut, so a whole interview's worth of questions stays in view.
+    const exchanges = [];
+    let budget = lean ? 700 : 12000;
+    for (let i = this.history.length - 1, n = 0; i >= 0; i--, n++) {
+      if (lean && exchanges.length) break; // lean mode carries only the latest exchange
+      const h = this.history[i];
+      const item = `Asked: ${h.question.slice(0, 300)}\nSuggested: ${h.answer.slice(0, lean ? 400 : n < 4 ? 700 : 250)}`;
+      if (item.length > budget && exchanges.length) break;
+      exchanges.unshift(item); budget -= item.length;
+      if (budget <= 0) break;
+    }
+    const earlier = exchanges.join('\n\n');
     const parts = [];
     // Notes sent with every answer: About me, CV, JD, Instructions, then pinned files from other sources.
     const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], lean ? { total: 6000, perNote: 2500 } : undefined)

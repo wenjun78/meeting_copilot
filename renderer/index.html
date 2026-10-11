@@ -135,7 +135,9 @@
           <label>Service <select id="s-service"><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom">Another OpenAI-compatible service</option></select></label>
           <label>API key <input id="s-llm-key" type="password"></label>
           <p class="hint" id="keyState"></p>
-          <label>Model that writes the answers <input id="s-llm-model" type="text"></label>
+          <label>Model that writes the answers <input id="s-llm-model" type="text" list="modelChoices"></label>
+          <datalist id="modelChoices"></datalist>
+          <p class="hint" id="modelHint"></p>
           <label>Model that turns speech into text <input id="s-stt-model" type="text"></label>
           <label id="s-llm-base-row">API address <input id="s-llm-base" type="text" placeholder="https://api.openai.com/v1"></label>
           <label>Spoken language <input id="s-stt-lang" type="text" placeholder="Detect automatically (or en, zh, ms ...)"></label>

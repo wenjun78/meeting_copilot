@@ -567,12 +567,21 @@ $('updateCheck').addEventListener('click', async () => {
 });
 
 // Picking a service fills in its address and sensible models, so only the key is left to paste.
+// `models` are suggestions for the answer model (any model name can be typed), with the price
+// per million tokens in and out as published in October 2026.
 const SERVICES = {
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' } },
-  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' } },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' },
+    models: [['gpt-6-astra', 'most capable, $10 in / $50 out'], ['gpt-6.1-sol', 'balanced, $2 / $10'], ['gpt-5.6-sol', '$4 / $20'], ['gpt-6-luna', 'cheapest, $0.10 / $0.50']] },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' },
+    models: [['openai/gpt-oss-120b', 'fast, $0.15 / $0.60'], ['openai/gpt-oss-20b', 'faster and smaller']] },
 };
 const serviceOf = (baseUrl) => (/api\.openai\.com/i.test(baseUrl) ? 'openai' : /api\.groq\.com/i.test(baseUrl) ? 'groq' : 'custom');
-function showService() { $('s-llm-base-row').hidden = $('s-service').value !== 'custom'; }
+function showService() {
+  const svc = SERVICES[$('s-service').value];
+  $('s-llm-base-row').hidden = !!svc;
+  $('modelChoices').replaceChildren(...(svc ? svc.models.map(([id, note]) => el('option', { value: id, label: note })) : []));
+  $('modelHint').textContent = svc ? `Suggestions: ${svc.models.map(([id]) => id).join(', ')}. Any model your key can use works; type its name.` : '';
+}
 $('s-service').addEventListener('change', () => {
   const svc = SERVICES[$('s-service').value];
   if (svc) {

@@ -698,3 +698,15 @@ test('answers remember the meeting: earlier questions and suggestions, and a lon
   await co.answer({ mode: 'typed', question: 'Fresh start?' });
   assert.ok(!/Earlier in this meeting|Point number/.test(chats[4]));
 });
+
+test('a whole interview of earlier questions stays in view, the latest in most detail', async () => {
+  const { co, chats } = scripted({ answer: 'Answer text. ' + 'detail '.repeat(150) });
+  for (let i = 1; i <= 25; i++) await co.answer({ mode: 'typed', question: `Question number ${i} about my background?` });
+  await co.answer({ mode: 'typed', question: 'What have we covered so far?' });
+  const prompt = chats.at(-1);
+  const asked = prompt.match(/^Asked: Question number \d+/gm) || [];
+  assert.equal(asked.length, 25, 'all twenty-five earlier questions are included');
+  assert.ok(prompt.indexOf('Question number 1 about') < prompt.indexOf('Question number 25 about'), 'oldest first');
+  const cut = (n) => new RegExp(`Asked: Question number ${n} about my background\\?\\nSuggested: ([^\\n]*)`).exec(prompt)[1].length;
+  assert.ok(cut(25) > 600 && cut(3) <= 250, 'recent answers are kept longer than old ones');
+});

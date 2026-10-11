@@ -102,8 +102,9 @@ own answers.
 
 The model itself keeps nothing between questions, so the app sends the
 context each time: your always-sent notes, the conversation so far (about
-the last ten minutes, both sides), the last few questions with the answers
-it suggested, the shared-screen text, and the best-matching passages. That
+the last ten minutes, both sides), the earlier questions with the answers
+it suggested (every earlier question of the meeting, the latest four in most
+detail), the shared-screen text, and the best-matching passages. That
 is why "make it shorter" or "can you elaborate?" works. "Clear for a new
 meeting" forgets the conversation and the earlier suggestions; your notes
 stay.
