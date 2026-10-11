@@ -5,14 +5,12 @@ const path = require('path');
 const { DEFAULTS: SHORTCUTS } = require('./shortcuts');
 
 const DEFAULTS = {
-  profile: '',
-  context: '',                        // this meeting: job description, agenda or brief; always given to the model
   autoAnswer: 'questions',            // 'questions' | 'off'
   autoUpdate: true,                   // download and install new versions of the app
   autoSync: true,                     // re-read sources in the background when they change
   answerLength: 'short',              // 'short' | 'detailed'
-  llm: { baseUrl: 'https://api.groq.com/openai/v1', apiKey: '', model: 'openai/gpt-oss-120b', extra: { reasoning_effort: 'low' } },
-  stt: { baseUrl: '', apiKey: '', model: 'whisper-large-v3', language: '', vocabulary: '' },
+  llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-5.6-sol', extra: { reasoning_effort: 'low' } },
+  stt: { baseUrl: '', apiKey: '', model: 'gpt-4o-transcribe', language: '', vocabulary: '' },
   embed: { baseUrl: '', apiKey: '', model: '' },
   github: { token: '', apiBase: 'https://api.github.com' },
   api: { searchUrl: '', headerName: 'Authorization', headerValue: '' },

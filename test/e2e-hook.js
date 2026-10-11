@@ -94,6 +94,24 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const mine2 = Object.values(kb.sources).find(x => x.label === 'My files');
     step('pasted text', { file: second.value.file, replaced: second.value.replaced, files: mine2.files, pinned: mine2.pinned.map(p => p.path), current: kb.search('Kilimanjaro migration', 2).length > 0, old: kb.search('Zanzibar', 2).length });
     if (mine2.files !== 3 || !second.value.replaced || mine2.pinned.length !== 2 || kb.search('Zanzibar', 2).length) throw new Error('pasting text did not behave as expected');
+
+    // The note form: "About me" rides along with every answer, a CV is searched instead,
+    // any note can be marked to ride along, and an existing note opens for editing.
+    await js(`document.getElementById('kbPaste').click()`);
+    await js(`document.querySelector('.chip[data-note="About me"]').click()`);
+    await waitFor('about me ready', () => js(`document.getElementById('kbPasteName').value === 'About me' && document.getElementById('kbPasteAlways').disabled && document.getElementById('kbPasteAlways').checked`));
+    await js(`document.getElementById('kbPasteText').value = 'I am a data engineer in Kuala Lumpur.'`);
+    await new Promise(r => setTimeout(r, 200));
+    await shot('2b-note-form');
+    await js(`document.getElementById('kbPasteForm').requestSubmit()`);
+    await waitFor('about me saved', () => kb.pinned().some(p => /About me\.md$/.test(p.path)));
+    const cv = await js(`window.mc.call('kb:addText', { name: 'CV', text: 'Ten years of experience with Fortran.', always: false })`);
+    const custom = await js(`window.mc.call('kb:addText', { name: 'Talking points', text: 'Mention the Serengeti rollout.', always: true })`);
+    const reopened = await js(`window.mc.call('kb:noteInfo', 'Talking points')`);
+    const pinnedNames = kb.pinned().map(p => path.basename(p.path));
+    step('note form', { pinned: pinnedNames, cvAlways: cv.value.always, customAlways: custom.value.always, reopened: reopened.value });
+    if (!pinnedNames.includes('About me.md') || !pinnedNames.includes('Talking points.md') || pinnedNames.includes('CV.md')
+      || reopened.value.text !== 'Mention the Serengeti rollout.' || !reopened.value.always || !kb.search('Fortran', 2).length) throw new Error('the note form did not behave as expected');
     await js(`(async () => { document.getElementById('kbTryInput').value = 'fuzzy match threshold'; document.getElementById('kbTry').requestSubmit(); })()`);
     await waitFor('kb hits', () => js(`document.querySelectorAll('#kbHits li b').length > 0`));
     step('kb search', { top: await js(`document.querySelector('#kbHits li b').textContent`) });

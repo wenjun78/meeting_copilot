@@ -1,6 +1,6 @@
 {
   "name": "meeting-copilot",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Floating meeting overlay: live two-sided transcript, shared-screen OCR, and answer suggestions grounded in your GitHub repos and API.",
   "main": "main.js",
   "license": "MIT",
@@ -24,7 +24,7 @@
   "engines": {
     "node": ">=20"
   },
-  "author": "Lau Wen Jun",
+  "author": "wjun78",
   "build": {
     "appId": "io.github.wenjun78.meetingcopilot",
     "productName": "Meeting Copilot",
@@ -76,6 +76,7 @@
         "owner": "wenjun78",
         "repo": "meeting_copilot"
       }
-    ]
+    ],
+    "copyright": "Copyright © 2026 wjun78"
   }
 }

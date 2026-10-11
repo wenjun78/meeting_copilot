@@ -43,6 +43,11 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-0
         const payload = JSON.parse(body.toString());
         log.chat.push(payload);
         if (payload.reject_me) return json(400, { error: { message: 'unknown param' } });
+        if (payload.model === 'strict-reasoner') { // behaves like a reasoning model that refuses the classic parameters one at a time
+          if ('max_tokens' in payload) return json(400, { error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." } });
+          if ('temperature' in payload) return json(400, { error: { message: "Unsupported value: 'temperature' does not support 0.3 with this model. Only the default (1) value is supported." } });
+          if ('verbosity' in payload) return json(400, { error: { message: "Unknown parameter: 'verbosity'." } });
+        }
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         const SQL = 'Here is the query.\n```sql\nSELECT c.id, c.name, COUNT(*) AS orders\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.created_at >= CURRENT_DATE - INTERVAL \'30\' DAY\nGROUP BY c.id, c.name\nHAVING COUNT(*) > 1;\n```\nI join orders to customers, keep the last 30 days, and filter groups with more than one order.\n- Customers with no orders drop out of the inner join';
         const fromScreen = /Base the reply on the shared-screen text/.test(payload.messages.at(-1).content);

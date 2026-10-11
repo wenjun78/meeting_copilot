@@ -252,9 +252,13 @@ class Copilot extends EventEmitter {
       `- Stay under ${detailed ? 220 : 110} words. Reply in the language the question was asked in.`,
       '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named, then one or two spoken sentences on how it works, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
       'Grounding:',
-      '- The reference material comes from the user\'s own repositories, documents and API. Prefer it over general knowledge and cite it inline as [1], [2].',
-      '- Never invent specifics about the user\'s own work, employer, numbers or history. If the references and profile do not cover something, answer from general knowledge and add a final line starting "Check:" naming what the user should verify before saying it.',
-      '- When a job description, agenda or brief for this meeting is given (pasted, or as a pinned note), shape the answer to it: lead with the experience, facts or skills it asks for, in its vocabulary. It describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the profile or references show it. If the user lacks something it asks for, say what is closest and true.',
+      '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
+      '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
+      '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
+      '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',
+      '- General knowledge (how something works, comparing tools, definitions): answer directly. No "Check:" line.',
+      '- Personal facts the notes do not give (salary expectation, notice period, visa or relocation status, availability): never state one. Offer a neutral line the user can adapt and add "Check:".',
+      '- When the pinned notes include a job description, agenda, brief or instructions for this meeting, shape the answer to them: lead with the experience, facts or skills they ask for, in their vocabulary, and follow any instructions on tone or length. A job description describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the user\'s own notes or references show it.',
       '- The transcript comes from speech recognition and the screen text from OCR; both can contain errors. Read through obvious mis-hearings.',
       '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
     ].join('\n');
@@ -262,8 +266,6 @@ class Copilot extends EventEmitter {
     const convo = this.entries.filter(e => !e.pending).slice(-14)
       .map(e => `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`).join('\n');
     const parts = [];
-    if (cfg.profile && cfg.profile.trim()) parts.push(`About me:\n${cfg.profile.trim().slice(0, 2500)}`);
-    if (cfg.context && cfg.context.trim()) parts.push(`About this meeting (job description, agenda or brief I was given):\n${cfg.context.trim().slice(0, 7000)}`);
     // Pinned notes from the sources (a job description file, a short bio) ride along with every answer.
     let room = 9000;
     const notes = [];
@@ -273,7 +275,7 @@ class Copilot extends EventEmitter {
       notes.push(`### ${n.title} (${n.path})\n${text}`);
       room -= text.length;
     }
-    if (notes.length) parts.push(`Pinned notes from my sources (always included; may be a job description for this meeting, or notes about me):\n${notes.join('\n\n')}`);
+    if (notes.length) parts.push(`Pinned notes from my sources (always included; may be a job description, agenda or instructions for this meeting, or notes about me):\n${notes.join('\n\n')}`);
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? 5000 : 1800)}`);
     if (refs.length) {

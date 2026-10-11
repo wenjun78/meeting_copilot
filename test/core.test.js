@@ -201,7 +201,9 @@ test('config store encrypts secrets at rest and keeps free-form extra params', (
   assert.equal(b.llm.apiKey, 'gsk_secret');
   assert.deepEqual(b.llm.extra, {});
   assert.equal(b.github.apiBase, 'https://ghe.example/api/v3');
-  assert.equal(b.stt.model, 'whisper-large-v3');
+  assert.equal(b.stt.model, 'gpt-4o-transcribe');
+  assert.equal(b.llm.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(b.llm.model, 'gpt-5.6-sol');
 });
 
 test('OCR cleanup drops icon noise and keeps real lines', () => {
@@ -229,7 +231,7 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   assert.equal(src[0].title, 'SLA policy', 'live API result comes first');
   assert.ok(src.some(s => /README\.md/.test(s.title) && /Jaro-Winkler/.test(s.snippet)));
   const prompt = srv.log.chat.at(-1).messages[1].content;
-  assert.match(prompt, /About me:\nData engineer\./);
+  assert.match(prompt, /Pinned notes from my sources[^\n]*\n### (About Alex|_jd\.md)/, 'pinned notes from the repo ride along');
   assert.match(prompt, /Them: How do you handle duplicate customer records\?/);
   assert.match(prompt, /Slide 4: Data quality KPIs/);
   assert.match(prompt, /\[2\] README\.md/);
@@ -462,21 +464,35 @@ test('re-syncing a source keeps the embeddings of passages that did not change',
   assert.equal(kb.sources.s.version, 'v2');
 });
 
-test('the job description or brief for the meeting is always given to the model, with a guard against claiming it', async () => {
+test('a pinned job description reaches the model with a guard against claiming its requirements', async () => {
   const { co, chats } = scripted();
-  const cfg = co.getConfig();
-  cfg.profile = 'Data engineer, five years of SQL and Python.';
-  cfg.context = 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.';
+  co.kb.setSource({ id: 'folder:x', label: 'My files', files: 2, chunks: [{ path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer.' }],
+    pinned: [{ path: 'my-files/About me.md', url: '', title: 'About me.md', text: 'Data engineer, five years of SQL and Python.' },
+      { path: 'my-files/JD.md', url: '', title: 'JD.md', text: 'Senior ML Engineer. Must have: Kubernetes, model serving, feature stores.' }] });
   const seen = [];
   const original = co.llm.chatStream;
   co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
   await co.answer({ mode: 'typed', question: 'Tell me about your experience with model serving.' });
-  assert.match(chats[0], /About me:\nData engineer, five years of SQL and Python\./);
-  assert.match(chats[0], /About this meeting \(job description, agenda or brief I was given\):\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.match(chats[0], /Pinned notes from my sources[^\n]*\n### About me\.md \(my-files\/About me\.md\)\nData engineer, five years of SQL and Python\./);
+  assert.match(chats[0], /### JD\.md \(my-files\/JD\.md\)\nSenior ML Engineer\. Must have: Kubernetes/);
+  assert.ok(!/^About me:/m.test(chats[0]), 'no separate profile section any more');
   assert.match(seen[0], /never present one of its requirements as the user's experience/);
-  cfg.context = '';
-  await co.answer({ mode: 'typed', question: 'And monitoring?' });
-  assert.ok(!/About this meeting/.test(chats[1]));
+});
+
+test('text from the old Settings boxes is moved into notes once, and both are sent with every answer', () => {
+  const { moveSettingsTextToNotes } = require('../src/migrate');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ profile: 'Data engineer in KL.', context: 'Role: Data Engineer. Must have SQL.', autoAnswer: 'off' }));
+  const config = new ConfigStore(path.join(dir, 'config.json'));
+  config.load();
+  const notes = path.join(dir, 'my-files');
+  assert.deepEqual(moveSettingsTextToNotes(config, notes).map(f => path.basename(f)), ['About me.md', 'Meeting brief.md']);
+  assert.equal(fs.readFileSync(path.join(notes, 'About me.md'), 'utf8'), 'Data engineer in KL.\n');
+  for (const f of ['About me.md', 'Meeting brief.md']) assert.ok(readNote(f, fs.readFileSync(path.join(notes, f), 'utf8')).pinned, f);
+  const reloaded = new ConfigStore(path.join(dir, 'config.json')).load();
+  assert.equal(reloaded.profile, ''); assert.equal(reloaded.context, ''); assert.equal(reloaded.autoAnswer, 'off');
+  assert.deepEqual(moveSettingsTextToNotes(config, notes), [], 'nothing to move the second time');
+  assert.deepEqual(fs.readdirSync(notes).sort(), ['About me.md', 'Meeting brief.md']);
 });
 
 test('front matter is stripped, and pinned notes are picked up by flag or by file name', () => {
@@ -485,8 +501,8 @@ test('front matter is stripped, and pinned notes are picked up by flag or by fil
   assert.ok(!about.chunks.some(c => /pinned: true|title: About/.test(c.text)), 'front matter is not indexed as content');
   assert.equal(readNote('notes/skills.md', '---\ntitle: Skills\n---\nPython.').pinned, null);
   for (const name of ['jd.md', '_jd.md', 'JD.txt', 'job-description.md', 'job_description.docx', 'jd.pdf', 'JD - Data Engineer.pdf', 'Lenovo_JD.docx',
-    'job description (final).md', 'interview instructions.md', 'agenda.txt', 'client-brief.md']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
-  for (const name of ['jdbc.md', 'cv.md', 'jd.py', 'briefcase.md', 'reinstructions.md', 'projects.md']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
+    'job description (final).md', 'interview instructions.md', 'agenda.txt', 'client-brief.md', 'About me.md', 'about_me.txt', 'bio.md']) assert.ok(readNote('x/' + name, 'Senior engineer wanted.').pinned, name);
+  for (const name of ['jdbc.md', 'cv.md', 'jd.py', 'briefcase.md', 'reinstructions.md', 'projects.md', 'biology.md', 'about meetings.md']) assert.equal(readNote('x/' + name, 'text = 1').pinned, null, name);
   assert.equal(readNote('a.md', 'No front matter here.\n---\nnot: meta').pinned, null);
 });
 
@@ -517,4 +533,30 @@ test('large exported HTML reports are read: embedded images are dropped, the tex
   assert.ok(text.length < 400, 'no image or script payload in the text');
   assert.equal(chunks[0].title, 'Forecasting.html — Forecasting numeric data', 'a heading wrapped over two lines stays one heading');
   assert.match(text, /Method\nTen-fold cross validation/);
+});
+
+test('a reasoning model that refuses max_tokens, temperature and an unknown extra still answers, keeping the effort setting', async () => {
+  const llm = new LLM(cfgFor({ llm: { baseUrl: srv.base + '/v1', apiKey: 'test-key', model: 'strict-reasoner', extra: { reasoning_effort: 'low', verbosity: 'low' } } }));
+  const before = srv.log.chat.length;
+  const text = await llm.chatStream([{ role: 'user', content: 'hi' }], { maxTokens: 700 });
+  assert.match(text, /two passes/);
+  assert.equal(srv.log.chat.length, before + 4, 'three refusals, then accepted');
+  const sent = srv.log.chat.at(-1);
+  assert.equal(sent.max_completion_tokens, 700);
+  assert.ok(!('max_tokens' in sent) && !('temperature' in sent) && !('verbosity' in sent));
+  assert.equal(sent.reasoning_effort, 'low', 'the accepted extra parameter is kept');
+});
+
+test('the prompt tells the model how to answer what the notes do not cover', async () => {
+  const { co } = scripted();
+  const seen = [];
+  const original = co.llm.chatStream;
+  co.llm.chatStream = (messages, opts) => { seen.push(messages[0].content); return original(messages, opts); };
+  await co.answer({ mode: 'typed', question: 'Where do you see yourself in five years?' });
+  const system = seen[0];
+  assert.match(system, /where do you see yourself in five years/);
+  assert.match(system, /Do not invent events, employers, numbers or credentials/);
+  assert.match(system, /answer only from the notes and references\. If they do not cover it, do not invent it/);
+  assert.match(system, /salary expectation, notice period[^\n]*never state one/);
+  assert.match(system, /General knowledge[^\n]*answer directly/);
 });

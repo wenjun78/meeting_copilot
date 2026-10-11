@@ -75,17 +75,25 @@
       </form>
       <div class="row">
         <button id="kbFiles" class="btn">Add files</button>
-        <button id="kbPaste" class="btn quiet" aria-expanded="false" aria-controls="kbPasteForm">Paste text</button>
+        <button id="kbPaste" class="btn quiet" aria-expanded="false" aria-controls="kbPasteForm">Write a note</button>
         <button id="kbFolder" class="btn quiet">Add a folder</button>
         <button id="kbSyncAll" class="btn quiet">Sync all</button>
         <span class="kb-status" id="kbStatus"></span>
       </div>
-      <form id="kbPasteForm" class="paste" hidden>
-        <input id="kbPasteName" type="text" placeholder="Name it: CV, JD, Instructions, Project notes" aria-label="Name for this note" autocomplete="off">
-        <textarea id="kbPasteText" rows="6" placeholder="Paste the text here, from Word, a web page or anywhere else" aria-label="Text to add"></textarea>
-        <p class="hint">A name with JD, job description, instructions, agenda or brief in it is sent with every answer. Anything else is searched when a question relates to it.</p>
+<form id="kbPasteForm" class="paste" hidden>
+        <div class="chips" role="group" aria-label="Common notes">
+          <button type="button" class="chip" data-note="About me" data-always="1">About me</button>
+          <button type="button" class="chip" data-note="Instructions" data-always="1">Instructions</button>
+          <button type="button" class="chip" data-note="JD" data-always="1">Job description</button>
+          <button type="button" class="chip" data-note="CV" data-always="0">CV</button>
+        </div>
+        <input id="kbPasteName" type="text" placeholder="Name of the note" aria-label="Name of the note" autocomplete="off">
+        <textarea id="kbPasteText" rows="7" placeholder="Write here, or paste from Word, a web page or anywhere else" aria-label="Text of the note"></textarea>
+        <label class="check"><input id="kbPasteAlways" type="checkbox" checked> Send with every answer</label>
+        <p class="hint" id="kbPasteHint"></p>
         <div class="row"><button class="btn primary" type="submit">Save note</button><button id="kbPasteCancel" class="btn quiet" type="button">Cancel</button></div>
       </form>
+      <p class="hint" id="contextPins"></p>
       <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
       <ul class="kb-list" id="kbList"></ul>
       <p class="empty" id="kbEmpty">No sources yet. Add files such as your CV and the job description (or drop them here), a GitHub repository, a username to pull every repo you own, or a URL. Markdown, PDF, Word, code and notebooks are read. Answers quote from what you add here.</p>
@@ -100,19 +108,17 @@
       <form id="settings" autocomplete="off">
         <fieldset>
           <legend>Model service</legend>
-          <label>API base URL <input id="s-llm-base" type="text" placeholder="https://api.groq.com/openai/v1"></label>
+          <label>Service <select id="s-service"><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom">Another OpenAI-compatible service</option></select></label>
           <label>API key <input id="s-llm-key" type="password"></label>
-          <label>Chat model <input id="s-llm-model" type="text"></label>
-          <label>Speech-to-text model <input id="s-stt-model" type="text"></label>
+          <label>Model that writes the answers <input id="s-llm-model" type="text"></label>
+          <label>Model that turns speech into text <input id="s-stt-model" type="text"></label>
+          <label id="s-llm-base-row">API address <input id="s-llm-base" type="text" placeholder="https://api.openai.com/v1"></label>
           <label>Spoken language <input id="s-stt-lang" type="text" placeholder="Detect automatically (or en, zh, ms ...)"></label>
           <label>Names and terms to get right <textarea id="s-stt-vocab" rows="2" placeholder="Product names, acronyms, people: CPM, Databricks, Wen Jun"></textarea></label>
         </fieldset>
         <fieldset>
           <legend>Answers</legend>
-          <label>About you <textarea id="s-profile" rows="4" placeholder="Your role, what you work on, and how you like to sound. Answers are written in your voice."></textarea></label>
-          <label>This meeting <textarea id="s-context" rows="4" placeholder="Paste the job description, agenda or client brief. Every answer is shaped to it."></textarea></label>
-          <div class="row"><button id="contextLoad" class="btn quiet" type="button">Load from a file</button><button id="contextClear" class="btn quiet" type="button">Clear</button></div>
-          <p class="hint" id="contextPins"></p>
+          <p class="hint">What the answers draw on (about you, your CV, the job description, instructions) is all under Knowledge.</p>
           <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
           <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
         </fieldset>
@@ -132,6 +138,8 @@
           <label>Read the screen every <select id="s-ocr-int"><option value="2">2 seconds</option><option value="4">4 seconds</option><option value="8">8 seconds</option><option value="15">15 seconds</option></select></label>
           <label>Screen text languages <input id="s-ocr-langs" type="text" placeholder="eng (add more with +, e.g. eng+chi_sim)"></label>
         </fieldset>
+        <details class="more">
+          <summary>More: GitHub token, your own search API, embeddings, window</summary>
         <fieldset>
           <legend>GitHub</legend>
           <label>Access token (private repos, higher limits) <input id="s-gh-token" type="password"></label>
@@ -154,10 +162,12 @@
           <label>Extra chat parameters (JSON) <input id="s-llm-extra" type="text"></label>
           <label>Window opacity <input id="s-opacity" type="range" min="0.45" max="1" step="0.05"></label>
         </fieldset>
+        </details>
         <fieldset>
           <legend>This app</legend>
           <label class="check"><input id="s-update" type="checkbox"> Install new versions automatically</label>
           <div class="row"><button id="updateCheck" class="btn quiet" type="button">Check for a new version</button><span class="hint" id="versionNote"></span></div>
+          <p class="hint">© 2026 wjun78</p>
         </fieldset>
         <div class="panel-foot sticky"><button class="btn primary" type="submit">Save settings</button><span class="hint" id="keyNote"></span></div>
       </form>

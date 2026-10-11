@@ -12,8 +12,9 @@ const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
 const { extractText } = require('./src/rag/extract');
-const { isIndexable } = require('./src/rag/chunker');
+const { isIndexable, isPinnedName, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
+const { moveSettingsTextToNotes } = require('./src/migrate');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
 if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
@@ -309,18 +310,6 @@ function wireIpc() {
   handle('shortcuts:suspend', (on) => { if (on) globalShortcut.unregisterAll(); else registerShortcuts(); return true; });
   handle('shortcuts:check', (accel) => ({ label: shortcuts.pretty(accel), problem: shortcuts.problem(accel) }));
 
-  // Reads a job description, agenda or brief from a file into the "This meeting" box.
-  handle('context:loadFile', async () => {
-    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: 'Load a job description, agenda or brief',
-      filters: [{ name: 'Documents', extensions: ['pdf', 'docx', 'txt', 'md', 'html'] }] });
-    if (r.canceled || !r.filePaths[0]) return null;
-    const file = r.filePaths[0];
-    if (fs.statSync(file).size > 25_000_000) throw new Error('That file is too large to read.');
-    const text = (await extractText(file.split(path.sep).join('/'), fs.readFileSync(file))).trim();
-    if (!text) throw new Error('No text could be read from that file. A scanned PDF has no text; paste the content instead.');
-    return { name: path.basename(file), text: text.slice(0, 7000), truncated: text.length > 7000 };
-  });
-
   handle('update:check', () => checkForUpdate({ manual: true }));
   handle('kb:stats', () => kb.stats());
   handle('kb:add', async (text) => {
@@ -356,19 +345,37 @@ function wireIpc() {
     if (!out.added.length && out.skipped.length) throw new Error(`Could not read ${out.skipped.join(', ')}. Use Markdown, text, PDF or Word files.`);
     return out;
   });
-  // Pasted text is saved as a note among the app's own files, named by the title given.
-  handle('kb:addText', async ({ name, text } = {}) => {
+  // Notes written in the app are saved among its own files, named by the title given.
+  const noteFile = (name) => {
+    const clean = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'Note';
+    return /\.(md|txt)$/i.test(clean) ? clean : clean + '.md';
+  };
+  // What is already saved under a name, so the note can be edited rather than pasted again.
+  handle('kb:noteInfo', (name) => {
+    const file = noteFile(name);
+    const full = path.join(myFilesDir(), file);
+    const info = { file, exists: false, text: '', always: isPinnedName(file), alwaysByName: isPinnedName(file) };
+    if (fs.existsSync(full)) {
+      const { meta, body } = frontMatter(fs.readFileSync(full, 'utf8'));
+      info.exists = true; info.text = body.trim();
+      info.always = info.alwaysByName || /^(true|yes|1)$/i.test(meta.pinned || '');
+    }
+    return info;
+  });
+  // always: send this note with every answer (instructions, about me) instead of searching it.
+  handle('kb:addText', async ({ name, text, always } = {}) => {
     const body = String(text || '').trim();
-    if (!body) throw new Error('Paste some text first.');
-    if (body.length > 600000) throw new Error('That is too much text for one note. Split it into a few notes.');
-    const clean = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'Pasted note';
-    const file = /\.(md|txt)$/i.test(clean) ? clean : clean + '.md';
+    if (!body) throw new Error('Write or paste some text first.');
+    // Same ceiling as any other note file, so everything that is saved is also searched.
+    if (Buffer.byteLength(body) > 380000) throw new Error('That is more than one note can hold (about 60,000 words). Split it into two notes.');
+    const file = noteFile(name);
     const dir = myFilesDir();
     fs.mkdirSync(dir, { recursive: true });
     const replaced = fs.existsSync(path.join(dir, file));
-    fs.writeFileSync(path.join(dir, file), body + '\n');
+    const pin = always && !isPinnedName(file) ? '---\npinned: true\n---\n' : '';
+    fs.writeFileSync(path.join(dir, file), pin + body + '\n');
     const added = await syncOrigin({ kind: 'folder', spec: dir });
-    return { file, replaced, added };
+    return { file, replaced, always: !!always || isPinnedName(file), added };
   });
   handle('kb:openFolder', (id) => {
     const src = kb.sources[id];
@@ -507,6 +514,11 @@ app.whenReady().then(() => {
 
   wireIpc();
   createWindow();
+
+  // One-time move of the old Settings boxes ("About you", "This meeting") into the notes.
+  try {
+    if (moveSettingsTextToNotes(config, myFilesDir()).length) syncOrigin({ kind: 'folder', spec: myFilesDir() }, { quiet: true }).catch(() => {});
+  } catch { /* the text stays in the config file and is tried again next launch */ }
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();
