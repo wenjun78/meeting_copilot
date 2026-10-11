@@ -11,11 +11,11 @@ const { KnowledgeBase } = require('./src/rag/kb');
 const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
-const { extractText } = require('./src/rag/extract');
+const { extractText, extractDoc } = require('./src/rag/extract');
 const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
-const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections } = require('./src/slots');
+const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
 if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
@@ -112,7 +112,7 @@ function publicConfig() {
 // Files added through the app are copied here, so they keep working if the originals move.
 const myFilesDir = () => path.join(app.getPath('userData'), 'my-files');
 
-// ---- sections: About me, CV, JD, Instructions, Portfolio -------------------------------
+// ---- sections: About me, CV, JD, Instructions, Publications, Portfolio -------------------------------
 
 const slotDir = (slot) => path.join(myFilesDir(), slot.dir);
 const syncMine = () => (fs.existsSync(myFilesDir()) ? syncOrigin({ kind: 'folder', spec: myFilesDir() }) : Promise.resolve([]));
@@ -599,8 +599,11 @@ app.whenReady().then(() => {
   try {
     moveSettingsTextToNotes(config, myFilesDir());
     moveLooseFilesIntoSections(myFilesDir());
-    syncMine().catch(() => {});
   } catch { /* tried again next launch */ }
+  movePapersToPublications(myFilesDir(), async (file) => /^Publication \(research paper\)/.test((await extractDoc(path.basename(file), fs.readFileSync(file))).name))
+    .then((moved) => { if (moved.length) send('notice', { level: 'info', message: `Moved to Publications: ${moved.join(', ')}` }); })
+    .catch(() => {})
+    .then(() => syncMine()).catch(() => {});
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();

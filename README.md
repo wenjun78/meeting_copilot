@@ -153,6 +153,7 @@ Everything lives in the **Knowledge** tab, organised by what it is:
 | CV | Your CV: paste it or add the PDF/Word file | Sent with every answer |
 | JD | The job description, agenda or brief for this meeting | Sent with every answer |
 | Instructions | Tone, length, what to stress or avoid | Sent with every answer |
+| Publications | Your papers: add the PDF or Word file; type how you sum each one up | Searched section by section (methods, results, limitations); each paper's title and abstract, and what you typed, sent with every answer |
 | Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
 | Equipped | Nothing to fill in: it shows what the above adds up to | |
 
@@ -161,7 +162,8 @@ files dropped onto it. Switching sections saves what you typed. Files are
 copied into the app's own folder, so they keep working if the originals move.
 
 **Sent with every answer** has a budget: the first 8,000 characters of each
-note or file, 20,000 in total, in the order About me, CV, JD, Instructions.
+note or file, 20,000 in total, in the order About me, CV, JD, Instructions,
+Publications.
 Anything longer is still searched. **Equipped** shows exactly how much of
 each note goes out, lists every searchable file with its passages, opens any
 of them to show the text as the app read it, and lets you try a question.
@@ -192,14 +194,15 @@ model under Settings > More to add meaning-based matching.
 
 ### Staying up to date
 
-With "Keep sources up to date automatically" on (the default), the app checks
+With "Keep repositories and web pages up to date automatically" on (the default), the app checks
 every source a few seconds after it opens, every 30 minutes after that, and
 once more at the moment you press Start listening.
 A repo that has not been pushed to is not downloaded again, so the check is
 one small request per repo. Apart from that one check, it pauses while you are listening to a meeting.
 URLs you added are fetched again on the same schedule, and your search API is
 asked live for every answer, so it is always current.
-"Sync" forces a full re-read at any time.
+"Sync" beside a repository or web address forces a full re-read of it at any
+time. Files you added are copies, read once when added.
 
 ## Privacy
 

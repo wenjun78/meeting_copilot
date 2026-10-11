@@ -303,12 +303,13 @@ $('onTop').addEventListener('click', async () => {
 window.mc.on('notice', (n) => toast(n.message, n.level));
 
 // ---- knowledge --------------------------------------------------------------
-// Sections (About me, CV, JD, Instructions, Portfolio) are the way in; typing, files and
+// Sections (About me, CV, JD, Instructions, Publications, Portfolio) are the way in; typing, files and
 // drag-and-drop are how each one is filled. "Equipped" shows everything that results.
 const SECTION_TEXT = {
   about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
   cv: { what: 'Your CV. Paste it here or add the file. Sent with every answer.', hint: 'Paste your CV, or drop the PDF or Word file below.' },
   jd: { what: 'The job description, agenda or brief for this meeting. Sent with every answer; replace it before a different meeting.', hint: 'Paste the job description, or drop the file below.' },
+  publications: { what: 'Your papers. Add each PDF or Word file: it is searched section by section (methods, results, limitations), and its title and abstract go with every answer. Text typed here goes with every answer too.', hint: 'How you would sum up each paper in 30 seconds, your part in it, and what you would do differently.' },
   instructions: { what: 'How the answers should behave: tone, length, what to stress, what to avoid. Sent with every answer.', hint: 'Keep answers under 30 seconds. Lead with ...' },
 };
 const kbView = { name: 'about', savedText: '', busy: false };
@@ -457,7 +458,6 @@ $('kbForm').addEventListener('submit', (e) => {
   if (v) kbRun(() => call('kb:add', v), (r) => { $('kbInput').value = ''; return addedMessage(r); });
 });
 $('kbFolder').addEventListener('click', () => kbRun(() => call('kb:addFolder'), addedMessage));
-$('kbSyncAll').addEventListener('click', () => kbRun(() => call('kb:sync', null), 'All sources are up to date'));
 $('kbAuto').addEventListener('change', async () => {
   try { const r = await call('config:set', { autoSync: $('kbAuto').checked }); state.cfg = r.config; } catch (e) { fail(e); }
 });

@@ -125,6 +125,22 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('portfolio', { pages: viaPages.ok, sources: await js(`[...document.querySelectorAll('#kbList .label')].map(n => n.textContent)`), files: await js(`[...document.querySelectorAll('#portfolioFiles .name')].map(n => n.textContent)`), added: pfAdd.value.added, folders: pfAdd.value.folders });
     await shot('2b-portfolio');
 
+    // Publications: the paper goes in its own section, is searched by section, and its
+    // abstract is among what goes with every answer. "Sync all" is gone from Portfolio.
+    await openSection('publications');
+    await js(`window.mc.call('slot:removeFile', 'portfolio', ${JSON.stringify(paper)})`);
+    const pubAdd = await js(`window.mc.call('slot:addFiles', 'publications', ${JSON.stringify([path.join(drop, paper)])})`);
+    await openSection('publications');
+    const pubRows = await js(`[...document.querySelectorAll('#slotFiles li')].map(li => ({ name: li.querySelector('.name').textContent, meta: li.querySelector('.meta').textContent }))`);
+    const methods = kb.search('i mean publication methodology', 8).map(h => h.title.replace(/^.* — /, ''));
+    const briefs = kb.pinned().filter(p => p.slot === 'publications').map(p => ({ title: p.title, chars: p.text.length }));
+    const syncAllGone = await js(`!document.getElementById('kbSyncAll')`);
+    await shot('2c-publications');
+    step('publications section', { added: pubAdd.value.added, rows: pubRows, methods, briefs, syncAllGone, selected: await selected() });
+    if (pubRows.length !== 1 || !/^Publication: Predicting shipment delays.*passages read$/.test(pubRows[0].meta)) throw new Error('the paper is not listed under Publications');
+    if (!methods.includes('Methods > Model') || !methods.includes('Methods > Data')) throw new Error('a methodology question does not reach the Methods section');
+    if (briefs.length !== 1 || !/^Publication: Predicting shipment delays/.test(briefs[0].title) || briefs[0].chars > 1500 || !syncAllGone) throw new Error('the abstract is not sent with every answer, or Sync all is still there');
+
     // Equipped: what goes with every answer, and every searchable file.
     await openSection('equipped');
     await waitFor('equipped lists', () => js(`document.querySelectorAll('#eqAlways details').length >= 4 && document.querySelectorAll('#eqSearched > details').length >= 2`));

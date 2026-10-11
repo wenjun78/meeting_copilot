@@ -17,7 +17,7 @@ const { ConfigStore } = require('../src/config');
 const { SLOTS, NOTE, planPinned, moveLooseFilesIntoSections } = require('../src/slots');
 const { Copilot } = require('../src/copilot');
 const { cleanOcrText } = require('../src/ocr');
-const { describe: describeDoc, sectionize } = require('../src/rag/extract');
+const { describe: describeDoc, sectionize, abstractOf, extractDoc } = require('../src/rag/extract');
 const shortcuts = require('../src/shortcuts');
 
 let srv;
@@ -660,7 +660,7 @@ test('loose notes from earlier versions are moved into their sections', () => {
   assert.deepEqual(ls('portfolio'), ['project notes.md']);
   assert.equal(fs.readFileSync(path.join(dir, 'about-me', NOTE), 'utf8'), 'Engineer.');
   assert.deepEqual(moveLooseFilesIntoSections(dir), [], 'nothing left to move');
-  assert.equal(SLOTS.filter(s => !s.searched).length, 4);
+  assert.equal(SLOTS.filter(s => !s.searched && !s.papers).length, 4);
 });
 
 test('the inventory lists every searchable file with its passages, and returns a file as it was read', async () => {
@@ -754,4 +754,43 @@ test('a paper saved under a meaningless file name is read, named by its title an
   assert.equal(describeDoc('download (3).pdf', paper, ''), 'Publication (research paper): Deep learning for widget inspection (download (3).pdf)');
   assert.equal(describeDoc('cv.pdf', 'Alex Tan\nData Engineer\nExperience ...', '(anonymous)'), 'cv.pdf');
   assert.equal(describeDoc('slides.pdf', 'Quarterly review\nAgenda', 'Quarterly business review'), 'Quarterly business review (slides.pdf)');
+});
+
+test('Publications: a paper is searched by section, its abstract goes with every answer, and papers in Portfolio move over once', async () => {
+  const { movePapersToPublications, planPinned, SLOTS } = require('../src/slots');
+  assert.deepEqual(SLOTS.map(s => s.id), ['about', 'cv', 'jd', 'instructions', 'publications', 'portfolio']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pubs-'));
+  const file = '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf';
+  fs.mkdirSync(path.join(dir, 'portfolio'));
+  fs.copyFileSync(path.join(__dirname, 'fixtures', file), path.join(dir, 'portfolio', file));
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf'), path.join(dir, 'portfolio', 'sample-cv.pdf'));
+  const isPaper = async (f) => /^Publication \(research paper\)/.test((await extractDoc(path.basename(f), fs.readFileSync(f))).name);
+
+  // The paper moves, the CV stays; a second run moves nothing, even if a paper is put in Portfolio again.
+  assert.deepEqual(await movePapersToPublications(dir, isPaper), [file]);
+  assert.ok(fs.existsSync(path.join(dir, 'publications', file)) && fs.existsSync(path.join(dir, 'portfolio', 'sample-cv.pdf')));
+  fs.copyFileSync(path.join(dir, 'publications', file), path.join(dir, 'portfolio', 'again.pdf'));
+  assert.deepEqual(await movePapersToPublications(dir, isPaper), []);
+  fs.rmSync(path.join(dir, 'portfolio', 'again.pdf'));
+
+  // A plain write-up in Publications counts as a paper too; typed text is sent with every answer.
+  fs.writeFileSync(path.join(dir, 'publications', 'thesis.md'), '# Churn thesis\n\n## Abstract\n\nWe model churn for a telecom with survival analysis over 12,000 accounts and find contract length matters most.\n\n## Methods\n\nCox regression with time-varying covariates.\n');
+  fs.writeFileSync(path.join(dir, 'publications', '_note.md'), 'I led the modelling for the shipment paper.\n');
+  const mine = await ingestFolder(dir, { sections: true });
+  const paper = mine.chunks.filter(c => c.path === `Publications/${file}`);
+  assert.ok(paper.length >= 5 && paper.every(c => c.title.startsWith('Publication (research paper): Predicting shipment delays')));
+  assert.ok(mine.chunks.some(c => c.path === 'Publications/thesis.md' && c.title.startsWith('Publication (research paper): thesis.md — Churn thesis') && /Cox regression/.test(c.text)));
+
+  const pins = mine.pinned.filter(p => p.slot === 'publications');
+  assert.deepEqual(pins.map(p => p.title).sort(), ['About my publications', 'Publication: Predicting shipment delays with gradient boosting: an explainable approach (' + file + ')', 'Publication: thesis.md']);
+  const brief = pins.find(p => p.path === `Publications/${file}`);
+  assert.match(brief.text, /^We predict shipment delays/);
+  assert.ok(brief.text.length <= 1500 && !/XGBoost reached an F1/.test(brief.text), 'only the abstract, not the whole paper');
+  assert.match(pins.find(p => p.path === 'Publications/thesis.md').text, /^We model churn .* matters most\.$/);
+  // Publications come after Instructions and before other pinned files in what is sent.
+  const sent = planPinned([{ title: 'x', text: 'x', slot: '' }, ...pins, { title: 'Instructions', text: 'i', slot: 'instructions' }]);
+  assert.deepEqual(sent.map(n => n.slot), ['instructions', 'publications', 'publications', 'publications', '']);
+
+  assert.equal(abstractOf('Title line\n\n## Introduction\n\n' + 'Long sentence here. '.repeat(200)).length <= 1500, true);
+  assert.equal(abstractOf(''), '');
 });

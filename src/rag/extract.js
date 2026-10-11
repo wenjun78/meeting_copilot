@@ -33,11 +33,11 @@ async function docxText(buf) {
 // ("5f6f95d7-....pdf", "download (3).pdf"), so the document's own title is used when there
 // is one, and a research paper is labelled as a publication so questions about "my paper"
 // or "my publication" find it.
-function describe(fileName, text, metaTitle = '') {
+function describe(fileName, text, metaTitle = '', isAPaper = false) {
   const head = text.slice(0, 4000);
   let title = metaTitle.replace(/\s+/g, ' ').trim();
   if (title.length < 8 || /^\W*(untitled|anonymous|unspecified|unknown|microsoft word|document\d*|slide \d+)/i.test(title) || /\.(pdf|docx?|tex|indd)$/i.test(title)) title = '';
-  const paper = isPaper(text);
+  const paper = isAPaper || isPaper(text);
   if (!title && paper) {
     // No title in the properties: take the lines between the journal banner and the authors/abstract.
     const lines = head.split('\n').map(l => l.trim()).filter(Boolean);
@@ -45,7 +45,7 @@ function describe(fileName, text, metaTitle = '') {
     const cand = lines.slice(0, stop > 0 ? stop : 8).filter(l => l.split(/\s+/).length >= 2 && !/^(original (paper|article)|research article|review|open access)$/i.test(l) && !/journal|proceedings|©|https?:|doi/i.test(l));
     title = cand.slice(0, -1).join(' ').slice(0, 160) || (cand[0] || '');
   }
-  if (!title) return fileName;
+  if (!title) return paper ? `Publication (research paper): ${fileName}` : fileName;
   return `${paper ? 'Publication (research paper): ' : ''}${title} (${fileName})`;
 }
 
@@ -104,19 +104,29 @@ const isPaper = (text) => {
   return /\babstract\b/i.test(head) && /\breferences\b|\bbibliography\b/i.test(text) && /doi|journal|proceedings|arxiv|springer|elsevier|ieee|©/i.test(head);
 };
 
+// The abstract of a paper (or, without one, how it opens): enough to say what the paper is.
+function abstractOf(text, max = 1500) {
+  const m = /^#{1,6} (?:abstract|summary)\s*\n([\s\S]*?)(?=^#{1,6} |(?![\s\S]))/im.exec(text);
+  const body = (m && m[1].trim().length > 80 ? m[1] : text.replace(/^#{1,6} .*$/gm, '')).replace(/\s*\n\s*/g, ' ').trim();
+  if (body.length <= max) return body;
+  const cut = body.slice(0, max);
+  return cut.slice(0, Math.max(cut.lastIndexOf('. ') + 1, max * 0.6)).trim();
+}
+
 // -> { text, name } ; text is '' for anything that is not readable (scanned, protected, binary)
-async function extractDoc(path, buf) {
+// paper: the file is known to be a paper (it sits in Publications), whatever it looks like.
+async function extractDoc(path, buf, { paper = false } = {}) {
   const ext = extOf(path);
   const fileName = String(path).split('/').pop();
   try {
-    if (ext === 'pdf') { const d = await pdfDoc(buf); return { text: sectionize(d.text, isPaper(d.text)), name: d.text.trim() ? describe(fileName, d.text, d.title) : fileName }; }
-    if (ext === 'docx') { const text = await docxText(buf); return { text: sectionize(text, isPaper(text)), name: describe(fileName, text) }; }
+    if (ext === 'pdf') { const d = await pdfDoc(buf); return { text: sectionize(d.text, paper || isPaper(d.text)), name: d.text.trim() ? describe(fileName, d.text, d.title, paper) : fileName }; }
+    if (ext === 'docx') { const text = await docxText(buf); return { text: sectionize(text, paper || isPaper(text)), name: describe(fileName, text, '', paper) }; }
   } catch {
     return { text: '', name: fileName }; // encrypted, scanned-image or damaged document
   }
-  return { text: looksBinary(buf) ? '' : Buffer.from(buf).toString('utf8'), name: fileName };
+  return { text: looksBinary(buf) ? '' : Buffer.from(buf).toString('utf8'), name: paper ? `Publication (research paper): ${fileName}` : fileName };
 }
 
 const extractText = async (path, buf) => (await extractDoc(path, buf)).text;
 
-module.exports = { extractText, extractDoc, describe, sectionize };
+module.exports = { extractText, extractDoc, describe, sectionize, abstractOf };

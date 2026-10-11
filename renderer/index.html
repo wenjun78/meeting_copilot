@@ -78,6 +78,7 @@
         <button role="tab" data-view="cv" aria-selected="false">CV</button>
         <button role="tab" data-view="jd" aria-selected="false">JD</button>
         <button role="tab" data-view="instructions" aria-selected="false">Instructions</button>
+        <button role="tab" data-view="publications" aria-selected="false">Publications</button>
         <button role="tab" data-view="portfolio" aria-selected="false">Portfolio</button>
         <button role="tab" data-view="equipped" aria-selected="false">Equipped</button>
       </div>
@@ -103,10 +104,9 @@
         </div>
         <div class="row">
           <button id="kbFolder" class="btn quiet" type="button">Add a folder</button>
-          <button id="kbSyncAll" class="btn quiet" type="button">Sync all now</button>
           <span class="kb-status" id="kbStatus"></span>
         </div>
-        <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
+        <label class="check" title="Checked when the app opens, every 30 minutes, and when you start listening"><input id="kbAuto" type="checkbox"> Keep repositories and web pages up to date automatically</label>
         <ul class="kb-list" id="kbList"></ul>
         <ul class="file-list" id="portfolioFiles"></ul>
         <p class="empty" id="kbEmpty">Nothing here yet. Add a GitHub repository, a username to pull every repo you own, your portfolio site, or files and folders.</p>
