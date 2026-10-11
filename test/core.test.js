@@ -17,6 +17,7 @@ const { ConfigStore } = require('../src/config');
 const { SLOTS, NOTE, planPinned, moveLooseFilesIntoSections } = require('../src/slots');
 const { Copilot } = require('../src/copilot');
 const { cleanOcrText } = require('../src/ocr');
+const { describe: describeDoc, sectionize, abstractOf, extractDoc } = require('../src/rag/extract');
 const shortcuts = require('../src/shortcuts');
 
 let srv;
@@ -204,7 +205,19 @@ test('config store encrypts secrets at rest and keeps free-form extra params', (
   assert.equal(b.github.apiBase, 'https://ghe.example/api/v3');
   assert.equal(b.stt.model, 'gpt-4o-transcribe');
   assert.equal(b.llm.baseUrl, 'https://api.openai.com/v1');
-  assert.equal(b.llm.model, 'gpt-5.6-sol');
+  assert.equal(b.llm.model, 'gpt-6.1-sol');
+
+  // Settings saved while gpt-5.6-sol was the default move to the new default once; picking
+  // gpt-5.6-sol again afterwards sticks, and any other saved model is never touched.
+  const old = path.join(path.dirname(file), 'old.json');
+  fs.writeFileSync(old, JSON.stringify({ llm: { model: 'gpt-5.6-sol', apiKey: 'enc:' + crypto.encrypt('sk-kept') } }));
+  const c = new ConfigStore(old, crypto); c.load();
+  assert.equal(c.get().llm.model, 'gpt-6.1-sol');
+  assert.equal(c.get().llm.apiKey, 'sk-kept');
+  c.update({ llm: { model: 'gpt-5.6-sol' } });
+  assert.equal(new ConfigStore(old, crypto).load().llm.model, 'gpt-5.6-sol');
+  fs.writeFileSync(old, JSON.stringify({ llm: { model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1' } }));
+  assert.equal(new ConfigStore(old, crypto).load().llm.model, 'openai/gpt-oss-120b');
 });
 
 test('OCR cleanup drops icon noise and keeps real lines', () => {
@@ -251,6 +264,13 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   await co.answer({ mode: 'screen', question: 'Summarise this slide' });
   assert.match(srv.log.chat.at(-1).messages[1].content, /Base the reply on the shared-screen text/);
   assert.match(co.transcriptText(), /Them: How do you handle/);
+  // The saved log has what was said and each answer suggested, in the order they happened.
+  const saved = co.transcriptText();
+  assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer:\n {4}\S/);
+  assert.match(saved, /Suggested answer \(you asked: What threshold do we use\?\):\n {4}[\s\S]*?0\.92/);
+  assert.match(saved, /Suggested answer \(from the screen\):/);
+  co.reset();
+  assert.equal(co.transcriptText(), '');
 });
 
 test('copilot: statements do not trigger an answer; auto-answer can be turned off', async () => {
@@ -659,7 +679,7 @@ test('loose notes from earlier versions are moved into their sections', () => {
   assert.deepEqual(ls('portfolio'), ['project notes.md']);
   assert.equal(fs.readFileSync(path.join(dir, 'about-me', NOTE), 'utf8'), 'Engineer.');
   assert.deepEqual(moveLooseFilesIntoSections(dir), [], 'nothing left to move');
-  assert.equal(SLOTS.filter(s => !s.searched).length, 4);
+  assert.equal(SLOTS.filter(s => !s.searched && !s.papers).length, 4);
 });
 
 test('the inventory lists every searchable file with its passages, and returns a file as it was read', async () => {
@@ -674,4 +694,122 @@ test('the inventory lists every searchable file with its passages, and returns a
   assert.equal(inv.reduce((n, s) => n + s.files.reduce((m, f) => m + f.passages, 0), 0), kb.chunks.length);
   assert.match(kb.fileText(inv[0].id, 'Portfolio/project notes.md'), /Moved 40 jobs to Airflow/);
   assert.ok(kb.pinned().every(p => p.sourceId), 'pinned notes know their source, so their text can be shown');
+});
+
+test('answers remember the meeting: earlier questions and suggestions, and a long conversation', async () => {
+  const { co, chats } = scripted({ answer: 'I cut load time from six hours to forty minutes [1].' });
+  await co.answer({ mode: 'typed', question: 'What was your biggest win on the ETL pipeline?' });
+  assert.ok(!/Earlier in this meeting/.test(chats[0]), 'nothing to remember on the first question');
+  await co.answer({ mode: 'typed', question: 'Make it shorter.' });
+  assert.match(chats[1], /Earlier in this meeting you suggested these answers[^\n]*\nAsked: What was your biggest win on the ETL pipeline\?\nSuggested: I cut load time from six hours to forty minutes/);
+  assert.match(chats[1], /My question: Make it shorter\./);
+
+  // Forty utterances are all still there when the next question comes; clearing the meeting forgets everything.
+  for (let i = 0; i < 40; i++) co.entries.push({ id: 100 + i, who: i % 2 ? 'you' : 'them', text: `Point number ${i} about the migration.`, t: Date.now(), dur: 1000, pending: false });
+  await co.answer({ mode: 'typed', question: 'What did they say first?' });
+  assert.match(chats[2], /Them: Point number 0 about the migration\./);
+  assert.match(chats[2], /Me: Point number 39 about the migration\./);
+  co.getConfig().answerContext = 'lean';
+  await co.answer({ mode: 'typed', question: 'And in lean mode?' });
+  assert.ok(!/Point number 0 about/.test(chats[3]) && /Point number 39 about/.test(chats[3]), 'lean keeps only the most recent part');
+  assert.equal((chats[3].match(/^Asked: /gm) || []).length, 1, 'lean carries one earlier suggestion');
+  co.reset();
+  co.getConfig().answerContext = 'full';
+  await co.answer({ mode: 'typed', question: 'Fresh start?' });
+  assert.ok(!/Earlier in this meeting|Point number/.test(chats[4]));
+});
+
+test('a whole interview of earlier questions stays in view, the latest in most detail', async () => {
+  const { co, chats } = scripted({ answer: 'Answer text. ' + 'detail '.repeat(150) });
+  for (let i = 1; i <= 25; i++) await co.answer({ mode: 'typed', question: `Question number ${i} about my background?` });
+  await co.answer({ mode: 'typed', question: 'What have we covered so far?' });
+  const prompt = chats.at(-1);
+  const asked = prompt.match(/^Asked: Question number \d+/gm) || [];
+  assert.equal(asked.length, 25, 'all twenty-five earlier questions are included');
+  assert.ok(prompt.indexOf('Question number 1 about') < prompt.indexOf('Question number 25 about'), 'oldest first');
+  const cut = (n) => new RegExp(`Asked: Question number ${n} about my background\\?\\nSuggested: ([^\\n]*)`).exec(prompt)[1].length;
+  assert.ok(cut(25) > 600 && cut(3) <= 250, 'recent answers are kept longer than old ones');
+});
+
+test('a paper saved under a meaningless file name is read, named by its title and found as "my publication"', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-'));
+  fs.mkdirSync(path.join(dir, 'portfolio'));
+  const file = '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf';
+  fs.copyFileSync(path.join(__dirname, 'fixtures', file), path.join(dir, 'portfolio', file));
+  fs.writeFileSync(path.join(dir, 'portfolio', 'scan.pdf'), '%PDF-1.4 not really a pdf');
+  const mine = await ingestFolder(dir, { sections: true });
+  assert.equal(mine.files, 1, 'the unreadable PDF gives no passages');
+  assert.ok(mine.chunks.length >= 3);
+  assert.ok(mine.chunks.every(c => c.title.startsWith('Publication (research paper): Predicting shipment delays with gradient boosting: an explainable approach (3c1d9a7e')), mine.chunks[0].title);
+
+  // Beside a large repository, a question about "my publication" still lands on the paper.
+  const kb = new KnowledgeBase(null);
+  kb.setSource({ ...mine, label: 'Your notes and files' }, { kind: 'folder', spec: dir });
+  kb.setSource({ id: 'github:x/big', label: 'x/big', files: 200, chunks: Array.from({ length: 400 }, (_, i) => ({ path: `big/report${i}.html`, url: '', title: `report${i}.html`, text: `Assignment ${i}: regression models, forecasting, research data and the model score${i % 20 ? '' : ' for publication quality charts'}.` })) });
+  kb.boost = { [mine.id]: 1.5 };
+  const hits = kb.search('Tell me about your publication', 4);
+  assert.match(hits[0].title, /^Publication \(research paper\): Predicting shipment delays/);
+  assert.match(kb.search('What F1 score did your paper reach and how did you interpret the model?', 3)[0].text, /F1 score of 0\.81|SHAP/);
+  // "Methodology" brings back the parts of the Methods section with their specifics, and the
+  // reference list (other people's work) is not kept.
+  for (const q of ['i mean publication methodology', 'walk me through the approach of your paper']) {
+    const got = kb.search(q, 8).filter(h => h.sourceId === mine.id);
+    assert.ok(got.some(h => / — Methods > Model$/.test(h.title) && /XGBoost[\s\S]*SMOTE/.test(h.text)), q);
+    assert.ok(got.some(h => / — Methods > Data$/.test(h.title) && /48,210/.test(h.text)), q);
+  }
+  assert.match(kb.search('what are the limitations of your paper', 3)[0].title, / — Limitations$/);
+  assert.ok(!mine.chunks.some(c => /Lundberg|Guestrin/.test(c.text)), 'references left out');
+  assert.deepEqual(kb.fileFacts(mine.id, `Portfolio/${file}`), { passages: mine.chunks.length, title: mine.chunks[0].title });
+  assert.equal(kb.fileFacts(mine.id, 'Portfolio/scan.pdf').passages, 0);
+
+  // Section headings of numbered papers, and of a CV, on their own.
+  const numbered = sectionize('A study\nAbstract\nShort.\n1 Introduction\nWhy.\n2 Methodology\n2.1 Feature engineering\nLagged delays.\n2.2 Model training\nLightGBM.\n3 Results\nGood.\nReferences\n[1] Other.', true);
+  assert.match(numbered, /^## 2 Methodology\n\n### 2\.1 Feature engineering\n\nLagged delays\.\n\n### 2\.2 Model training/m);
+  assert.ok(!/Other/.test(numbered));
+  assert.match(sectionize('Alex Tan\nWork experience\n1. Built pipelines at Acme\nEducation\nBSc', false), /## Work experience\n\n1\. Built pipelines at Acme\n\n## Education/);
+
+  // Naming rules on their own.
+  const paper = 'Journal of Things\nORIGINAL PAPER\nDeep learning for\nwidget inspection\nA. Author · B. Writer\nAbstract\nWe study widgets. https://doi.org/10.1/x\n' + 'text '.repeat(50) + '\nReferences\n[1] Someone.';
+  assert.equal(describeDoc('download (3).pdf', paper, ''), 'Publication (research paper): Deep learning for widget inspection (download (3).pdf)');
+  assert.equal(describeDoc('cv.pdf', 'Alex Tan\nData Engineer\nExperience ...', '(anonymous)'), 'cv.pdf');
+  assert.equal(describeDoc('slides.pdf', 'Quarterly review\nAgenda', 'Quarterly business review'), 'Quarterly business review (slides.pdf)');
+});
+
+test('Publications: a paper is searched by section, its abstract goes with every answer, and papers in Portfolio move over once', async () => {
+  const { movePapersToPublications, planPinned, SLOTS } = require('../src/slots');
+  assert.deepEqual(SLOTS.map(s => s.id), ['about', 'cv', 'jd', 'instructions', 'publications', 'portfolio']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pubs-'));
+  const file = '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf';
+  fs.mkdirSync(path.join(dir, 'portfolio'));
+  fs.copyFileSync(path.join(__dirname, 'fixtures', file), path.join(dir, 'portfolio', file));
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'sample-cv.pdf'), path.join(dir, 'portfolio', 'sample-cv.pdf'));
+  const isPaper = async (f) => /^Publication \(research paper\)/.test((await extractDoc(path.basename(f), fs.readFileSync(f))).name);
+
+  // The paper moves, the CV stays; a second run moves nothing, even if a paper is put in Portfolio again.
+  assert.deepEqual(await movePapersToPublications(dir, isPaper), [file]);
+  assert.ok(fs.existsSync(path.join(dir, 'publications', file)) && fs.existsSync(path.join(dir, 'portfolio', 'sample-cv.pdf')));
+  fs.copyFileSync(path.join(dir, 'publications', file), path.join(dir, 'portfolio', 'again.pdf'));
+  assert.deepEqual(await movePapersToPublications(dir, isPaper), []);
+  fs.rmSync(path.join(dir, 'portfolio', 'again.pdf'));
+
+  // A plain write-up in Publications counts as a paper too; typed text is sent with every answer.
+  fs.writeFileSync(path.join(dir, 'publications', 'thesis.md'), '# Churn thesis\n\n## Abstract\n\nWe model churn for a telecom with survival analysis over 12,000 accounts and find contract length matters most.\n\n## Methods\n\nCox regression with time-varying covariates.\n');
+  fs.writeFileSync(path.join(dir, 'publications', '_note.md'), 'I led the modelling for the shipment paper.\n');
+  const mine = await ingestFolder(dir, { sections: true });
+  const paper = mine.chunks.filter(c => c.path === `Publications/${file}`);
+  assert.ok(paper.length >= 5 && paper.every(c => c.title.startsWith('Publication (research paper): Predicting shipment delays')));
+  assert.ok(mine.chunks.some(c => c.path === 'Publications/thesis.md' && c.title.startsWith('Publication (research paper): thesis.md — Churn thesis') && /Cox regression/.test(c.text)));
+
+  const pins = mine.pinned.filter(p => p.slot === 'publications');
+  assert.deepEqual(pins.map(p => p.title).sort(), ['About my publications', 'Publication: Predicting shipment delays with gradient boosting: an explainable approach (' + file + ')', 'Publication: thesis.md']);
+  const brief = pins.find(p => p.path === `Publications/${file}`);
+  assert.match(brief.text, /^We predict shipment delays/);
+  assert.ok(brief.text.length <= 1500 && !/XGBoost reached an F1/.test(brief.text), 'only the abstract, not the whole paper');
+  assert.match(pins.find(p => p.path === 'Publications/thesis.md').text, /^We model churn .* matters most\.$/);
+  // Publications come after Instructions and before other pinned files in what is sent.
+  const sent = planPinned([{ title: 'x', text: 'x', slot: '' }, ...pins, { title: 'Instructions', text: 'i', slot: 'instructions' }]);
+  assert.deepEqual(sent.map(n => n.slot), ['instructions', 'publications', 'publications', 'publications', '']);
+
+  assert.equal(abstractOf('Title line\n\n## Introduction\n\n' + 'Long sentence here. '.repeat(200)).length <= 1500, true);
+  assert.equal(abstractOf(''), '');
 });

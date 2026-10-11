@@ -32,21 +32,21 @@ function toast(message, level = 'info') {
 const fail = (e) => toast(e.message || String(e), 'error');
 
 // ---- cue card ---------------------------------------------------------------
-function inline(parent, text) {
+function inline(parent, text, sources = state.answer.sources) {
   for (const part of text.split(/(\*\*[^*]+\*\*|\[\d+\]|`[^`]+`)/)) {
     if (!part) continue;
     let m;
     if ((m = /^\*\*([^*]+)\*\*$/.exec(part))) parent.append(el('strong', { text: m[1] }));
     else if ((m = /^`([^`]+)`$/.exec(part))) parent.append(el('code', { text: m[1] }));
     else if ((m = /^\[(\d+)\]$/.exec(part))) {
-      const src = state.answer.sources.find(s => s.n === Number(m[1]));
+      const src = sources.find(s => s.n === Number(m[1]));
       if (src) parent.append(el('button', { class: 'cite', type: 'button', title: `${src.title}\n${src.snippet}`, text: m[1], onclick: () => openSource(src) }));
       else parent.append(part);
     } else parent.append(part);
   }
 }
 
-function renderAnswerText(card, text) {
+function renderAnswerText(card, text, sources = state.answer.sources) {
   card.replaceChildren();
   let list = null, first = true, code = null;
   for (const raw of text.split('\n')) {
@@ -62,12 +62,12 @@ function renderAnswerText(card, text) {
     const bullet = /^(?:[-*•]|\d+[.)])\s+(.*)$/.exec(line);
     if (bullet) {
       if (!list) card.append((list = el('ul')));
-      const li = el('li'); inline(li, bullet[1]); list.append(li);
+      const li = el('li'); inline(li, bullet[1], sources); list.append(li);
       continue;
     }
     list = null;
     const p = el('p', { class: /^check:/i.test(line) ? 'check' : first ? 'lead' : '' });
-    inline(p, line.replace(/^#+\s*/, ''));
+    inline(p, line.replace(/^#+\s*/, ''), sources);
     card.append(p); first = false;
   }
 }
@@ -114,14 +114,46 @@ window.mc.on('answer', (e) => {
   else if (e.id < a.id) return; // a newer answer has replaced this one
   else if (e.type === 'sources') a.sources = e.sources;
   else if (e.type === 'delta') a.text += e.text;
-  else if (e.type === 'done') { a.status = 'done'; a.text = e.text || a.text; }
+  else if (e.type === 'done') { a.status = 'done'; a.text = e.text || a.text; logAnswer(a); }
   else if (e.type === 'error') {
     if (a.status === 'idle' || e.id > a.id) state.answer = { id: e.id, text: '', sources: [], status: 'error', error: e.message };
     else { a.status = 'error'; a.error = e.message; }
   }
   cancelAnimationFrame(state.raf);
-  state.raf = requestAnimationFrame(() => { renderAnswer(); updateSetupMode(); });
+  state.raf = requestAnimationFrame(() => { renderAnswer(); renderLog(); updateSetupMode(); });
 });
+
+// ---- conversation log: every answer given, kept for the meeting ----------------------
+// Each finished answer is added to the transcript where it was given, and listed under
+// the current answer (in the wide layout) so an earlier one can be read again.
+const answerLog = [];
+const askedLabel = (a) => (a.mode === 'typed' ? `You asked: ${a.question}` : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : 'From the screen') : `They said: ${a.question}`);
+function logAnswer(a) {
+  if (!a.text || !a.text.trim() || answerLog.some(x => x.id === a.id)) return;
+  const item = { id: a.id, t: Date.now(), mode: a.mode, question: a.question || '', text: a.text, sources: a.sources || [] };
+  answerLog.push(item);
+  const panel = $('tab-transcript');
+  const pinned = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 60;
+  const lead = item.text.split('\n').map(l => l.trim()).find(l => l && !/^(```|~~~)/.test(l)) || '';
+  $('lines').append(el('div', { class: 'line answer', 'data-who': 'answer' }, el('span', { class: 'who', text: 'Answer' }),
+    el('details', {}, el('summary', { title: askedLabel(item), text: lead.replace(/\*\*|\s*\[\d+\]/g, '') }), el('pre', { text: item.text }))));
+  restyleLines();
+  if (pinned) panel.scrollTop = panel.scrollHeight;
+}
+function renderLog() {
+  // The answer on the card is not repeated beneath itself.
+  const earlier = answerLog.filter(x => x.id !== state.answer.id || state.answer.status === 'idle').reverse();
+  $('log').classList.toggle('has', earlier.length > 0);
+  const open = new Set([...$('logList').querySelectorAll('details[open]')].map(d => d.dataset.id));
+  $('logList').replaceChildren(...earlier.map(x => {
+    const body = el('div', { class: 'card' });
+    renderAnswerText(body, x.text, x.sources);
+    const d = el('details', { 'data-id': String(x.id) },
+      el('summary', {}, el('time', { text: new Date(x.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }), el('span', { text: askedLabel(x) })), body);
+    d.open = open.has(String(x.id));
+    return d;
+  }));
+}
 
 const ask = (req) => call('answer:ask', req).catch(fail);
 $('answerNow').addEventListener('click', () => ask({ mode: 'manual' }));
@@ -181,10 +213,11 @@ window.mc.on('transcript', ({ type, entry }) => {
 $('resetBtn').addEventListener('click', async () => {
   await call('meeting:reset').catch(fail);
   lines.clear(); $('lines').replaceChildren(); restyleLines();
-  state.answer = { id: state.answer.id, text: '', sources: [], status: 'idle' }; renderAnswer();
+  answerLog.length = 0;
+  state.answer = { id: state.answer.id, text: '', sources: [], status: 'idle' }; renderAnswer(); renderLog();
 });
 $('exportBtn').addEventListener('click', async () => {
-  try { const p = await call('meeting:export'); if (p) toast(`Transcript saved to ${p}`); } catch (e) { fail(e); }
+  try { const p = await call('meeting:export'); if (p) toast(`Conversation log saved to ${p}`); } catch (e) { fail(e); }
 });
 
 // ---- listening --------------------------------------------------------------
@@ -271,7 +304,8 @@ function showTab(name) {
   for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== `tab-${name}`;
   updateSetupMode();
 }
-// While Knowledge or Settings is open and there is no call or answer, give them the whole window.
+// While Knowledge or Settings is open and there is no call or answer, give them the whole
+// window. (Side by side, in the wide layout, the answer area stays: see the stylesheet.)
 function updateSetupMode() {
   const tab = document.querySelector('.tabs button[aria-selected="true"]');
   const settingUp = tab && (tab.dataset.tab === 'knowledge' || tab.dataset.tab === 'settings');
@@ -303,12 +337,13 @@ $('onTop').addEventListener('click', async () => {
 window.mc.on('notice', (n) => toast(n.message, n.level));
 
 // ---- knowledge --------------------------------------------------------------
-// Sections (About me, CV, JD, Instructions, Portfolio) are the way in; typing, files and
+// Sections (About me, CV, JD, Instructions, Publications, Portfolio) are the way in; typing, files and
 // drag-and-drop are how each one is filled. "Equipped" shows everything that results.
 const SECTION_TEXT = {
   about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
   cv: { what: 'Your CV. Paste it here or add the file. Sent with every answer.', hint: 'Paste your CV, or drop the PDF or Word file below.' },
   jd: { what: 'The job description, agenda or brief for this meeting. Sent with every answer; replace it before a different meeting.', hint: 'Paste the job description, or drop the file below.' },
+  publications: { what: 'Your papers. Add each PDF or Word file: it is searched section by section (methods, results, limitations), and its title and abstract go with every answer. Text typed here goes with every answer too.', hint: 'How you would sum up each paper in 30 seconds, your part in it, and what you would do differently.' },
   instructions: { what: 'How the answers should behave: tone, length, what to stress, what to avoid. Sent with every answer.', hint: 'Keep answers under 30 seconds. Lead with ...' },
 };
 const kbView = { name: 'about', savedText: '', busy: false };
@@ -321,11 +356,19 @@ function ago(t) {
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
+// One row per added file: its name, what the app made of it, and how much was read. A file
+// that gave no text (a scanned or protected PDF) is said so here rather than silently ignored.
 function fileRows(list, slotId, after) {
-  return list.map(f => el('li', {},
-    el('span', { class: 'name', title: f.name, text: f.name }),
-    el('span', { class: 'size', text: fmtSize(f.size) }),
-    el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => { try { after(await call('slot:removeFile', slotId, f.name)); } catch (e) { fail(e); } } })));
+  return list.map(f => {
+    const unread = !f.passages;
+    const known = f.title && f.title !== f.name ? f.title.replace(` (${f.name})`, '').replace(' (research paper)', '') : '';
+    return el('li', { class: unread ? 'unread' : '' },
+      el('span', { class: 'name', title: f.name, text: f.name }),
+      el('span', { class: 'size', text: fmtSize(f.size) }),
+      el('button', { class: 'btn quiet', type: 'button', text: 'Remove', onclick: async () => { try { after(await call('slot:removeFile', slotId, f.name)); } catch (e) { fail(e); } } }),
+      el('span', { class: 'meta', text: unread ? 'No text could be read from this file. If it is a scan or is protected, paste the text instead.'
+        : `${known ? `${known}. ` : ''}${num(f.passages)} ${f.passages === 1 ? 'passage' : 'passages'} read` }));
+  });
 }
 
 function renderSlot(info) {
@@ -449,7 +492,6 @@ $('kbForm').addEventListener('submit', (e) => {
   if (v) kbRun(() => call('kb:add', v), (r) => { $('kbInput').value = ''; return addedMessage(r); });
 });
 $('kbFolder').addEventListener('click', () => kbRun(() => call('kb:addFolder'), addedMessage));
-$('kbSyncAll').addEventListener('click', () => kbRun(() => call('kb:sync', null), 'All sources are up to date'));
 $('kbAuto').addEventListener('change', async () => {
   try { const r = await call('config:set', { autoSync: $('kbAuto').checked }); state.cfg = r.config; } catch (e) { fail(e); }
 });
@@ -534,6 +576,8 @@ function fillSettings() {
   const keyHint = (has) => (has ? 'Saved. Type to replace.' : '');
   $('s-llm-base').value = c.llm.baseUrl; $('s-llm-model').value = c.llm.model; $('s-llm-key').placeholder = keyHint(s.llmKey) || 'Paste your API key';
   $('s-service').value = serviceOf(c.llm.baseUrl); showService();
+  $('keyState').textContent = s.llmKey ? 'A key is saved on this computer and stays until you replace it.' : 'No key saved yet. Paste one and press Save settings.';
+  $('keyState').classList.toggle('warn', !s.llmKey);
   $('s-llm-extra').value = JSON.stringify(c.llm.extra || {});
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = c.stt.language; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
@@ -565,18 +609,29 @@ $('updateCheck').addEventListener('click', async () => {
 });
 
 // Picking a service fills in its address and sensible models, so only the key is left to paste.
+// `models` are suggestions for the answer model (any model name can be typed), with the price
+// per million tokens in and out as published in October 2026.
 const SERVICES = {
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.6-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' } },
-  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' } },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' },
+    models: [['gpt-6.1-sol', 'default: balanced, $2 in / $10 out'], ['gpt-6-astra', 'most capable, $10 / $50'], ['gpt-5.6-sol', '$4 / $20'], ['gpt-6-luna', 'cheapest, $0.10 / $0.50']] },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' },
+    models: [['openai/gpt-oss-120b', 'fast, $0.15 / $0.60'], ['openai/gpt-oss-20b', 'faster and smaller']] },
 };
 const serviceOf = (baseUrl) => (/api\.openai\.com/i.test(baseUrl) ? 'openai' : /api\.groq\.com/i.test(baseUrl) ? 'groq' : 'custom');
-function showService() { $('s-llm-base-row').hidden = $('s-service').value !== 'custom'; }
+function showService() {
+  const svc = SERVICES[$('s-service').value];
+  $('s-llm-base-row').hidden = !!svc;
+  $('modelChoices').replaceChildren(...(svc ? svc.models.map(([id, note]) => el('option', { value: id, label: note })) : []));
+  $('modelHint').textContent = svc ? `Suggestions: ${svc.models.map(([id]) => id).join(', ')}. Any model your key can use works; type its name.` : '';
+}
 $('s-service').addEventListener('change', () => {
   const svc = SERVICES[$('s-service').value];
   if (svc) {
     $('s-llm-base').value = svc.baseUrl; $('s-llm-model').value = svc.model; $('s-stt-model').value = svc.stt;
     $('s-llm-extra').value = JSON.stringify(svc.extra);
     $('s-llm-key').placeholder = 'Paste the key for this service'; // the saved key belongs to the previous service
+    $('keyState').textContent = 'The saved key belongs to the service you had before. Paste the key for this one, then Save settings.';
+    $('keyState').classList.add('warn');
   }
   showService();
 });

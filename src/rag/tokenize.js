@@ -21,7 +21,15 @@ function stem(w) {
   return w;
 }
 
-function tokenize(text) {
+// Words used interchangeably in questions and documents are indexed as one.
+const SAME = { methodology: 'method', methodologies: 'method', methodological: 'method', finding: 'result', outcome: 'result',
+  publish: 'publication', paper: 'publication', article: 'publication', resume: 'cv', limitation: 'limit', weaknes: 'limit', conclusion: 'conclude' };
+
+// Words in a question that also ask for another word. Only for questions: a document that
+// says "our approach" is not thereby a Methods section.
+const ASKS = { approach: 'method', technique: 'method', algorithm: 'method', achieve: 'result', accuracy: 'result', performance: 'result' };
+
+function tokenize(text, { question = false } = {}) {
   const out = [];
   if (!text) return out;
   const parts = String(text)
@@ -41,7 +49,9 @@ function tokenize(text) {
     const w = raw.toLowerCase();
     if (w.length < 2 && !/\d/.test(w)) continue;
     if (STOP.has(w)) continue;
-    out.push(stem(w));
+    const t = stem(w);
+    out.push(SAME[t] || t);
+    if (question && ASKS[t]) out.push(ASKS[t]);
   }
   return out;
 }

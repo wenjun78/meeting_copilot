@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut, screen, dialog, shell, safeStorage, net, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut, screen, dialog, shell, safeStorage, net, systemPreferences, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { fileURLToPath } = require('url');
@@ -11,11 +11,11 @@ const { KnowledgeBase } = require('./src/rag/kb');
 const github = require('./src/rag/github');
 const api = require('./src/rag/api');
 const { ingestFolder } = require('./src/rag/local');
-const { extractText } = require('./src/rag/extract');
+const { extractText, extractDoc } = require('./src/rag/extract');
 const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
-const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections } = require('./src/slots');
+const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
 if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
@@ -54,6 +54,15 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
+  // Right-click: cut, copy and paste in text boxes; copy for selected text anywhere else.
+  win.webContents.on('context-menu', (_e, p) => {
+    const items = [];
+    if (p.isEditable) {
+      items.push({ role: 'cut', enabled: p.editFlags.canCut }, { role: 'copy', enabled: p.editFlags.canCopy }, { role: 'paste', enabled: p.editFlags.canPaste },
+        { type: 'separator' }, { role: 'selectAll', enabled: p.editFlags.canSelectAll });
+    } else if (p.selectionText && p.selectionText.trim()) items.push({ role: 'copy' });
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
+  });
 
   let saveTimer;
   const remember = () => {
@@ -103,7 +112,7 @@ function publicConfig() {
 // Files added through the app are copied here, so they keep working if the originals move.
 const myFilesDir = () => path.join(app.getPath('userData'), 'my-files');
 
-// ---- sections: About me, CV, JD, Instructions, Portfolio -------------------------------
+// ---- sections: About me, CV, JD, Instructions, Publications, Portfolio -------------------------------
 
 const slotDir = (slot) => path.join(myFilesDir(), slot.dir);
 const syncMine = () => (fs.existsSync(myFilesDir()) ? syncOrigin({ kind: 'folder', spec: myFilesDir() }) : Promise.resolve([]));
@@ -115,8 +124,10 @@ function slotInfo(slot) {
   try { text = frontMatter(fs.readFileSync(path.join(dir, NOTE), 'utf8')).body.trim(); } catch { /* nothing typed yet */ }
   let files = [];
   try {
+    const sourceId = `folder:${myFilesDir()}`;
     files = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isFile() && e.name !== NOTE)
-      .map(e => ({ name: e.name, size: fs.statSync(path.join(dir, e.name)).size })).sort((a, b) => a.name.localeCompare(b.name));
+      .map(e => ({ name: e.name, size: fs.statSync(path.join(dir, e.name)).size, ...kb.fileFacts(sourceId, `${slot.label}/${e.name}`) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   } catch { /* no folder yet */ }
   return { id: slot.id, label: slot.label, title: slot.title, searched: !!slot.searched, text, files };
 }
@@ -369,6 +380,9 @@ function wireIpc() {
     if (/^https?:\/\/([\w-]+\.)?linkedin\.com\//i.test(spec)) {
       throw new Error('LinkedIn does not let apps read profiles. On your profile choose More > Save to PDF, then add that file with "Add files".');
     }
+    if (/^https?:\/\/([\w-]+\.)?(researchgate\.net|academia\.edu)\//i.test(spec)) {
+      throw new Error('That site does not let apps read its pages. Download the PDF of the paper and add the file here instead.');
+    }
     const pagesSite = /^https?:\/\/[\w-]+\.github\.io(\/|$)/i.test(spec);
     const isUrl = /^https?:\/\//i.test(spec) && !pagesSite && !/^https?:\/\/(www\.)?github\.com\//i.test(spec);
     if (pagesSite) {
@@ -504,7 +518,7 @@ function wireIpc() {
   handle('meeting:reset', () => { copilot.reset(); return true; });
   handle('meeting:export', async () => {
     const text = copilot.transcriptText();
-    if (!text) throw new Error('The transcript is empty.');
+    if (!text) throw new Error('Nothing has been said or answered yet.');
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
     const r = await dialog.showSaveDialog(win, { defaultPath: `meeting-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
     if (r.canceled || !r.filePath) return null;
@@ -557,6 +571,7 @@ app.whenReady().then(() => {
   config = new ConfigStore(path.join(dir, 'config.json'), crypto);
   config.load();
   kb = new KnowledgeBase(path.join(dir, 'knowledge')).load();
+  kb.boost = { [`folder:${myFilesDir()}`]: 1.5 }; // what the user added by hand outranks bulk repository content
   llm = new LLM(() => config.get(), netFetch);
   ocr = new OcrEngine({ dataDir: path.join(dir, 'tessdata'), fetchFn: netFetch });
   copilot = new Copilot({ getConfig: () => config.get(), llm, kb, liveSearch: (t, q, o) => api.liveSearch(t, q, { ...o, fetchFn: netFetch }) });
@@ -584,8 +599,11 @@ app.whenReady().then(() => {
   try {
     moveSettingsTextToNotes(config, myFilesDir());
     moveLooseFilesIntoSections(myFilesDir());
-    syncMine().catch(() => {});
   } catch { /* tried again next launch */ }
+  movePapersToPublications(myFilesDir(), async (file) => /^Publication \(research paper\)/.test((await extractDoc(path.basename(file), fs.readFileSync(file))).name))
+    .then((moved) => { if (moved.length) send('notice', { level: 'info', message: `Moved to Publications: ${moved.join(', ')}` }); })
+    .catch(() => {})
+    .then(() => syncMine()).catch(() => {});
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();

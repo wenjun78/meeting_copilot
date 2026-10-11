@@ -172,6 +172,8 @@ input.keys:focus { border-color: var(--them); }
 .file-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 4px 5px 9px; background: var(--shell-2); border-radius: 6px; }
 .file-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-list .size { color: var(--muted); font-size: 11.5px; }
+.file-list .meta { grid-column: 1 / -1; color: var(--muted); font-size: 11.5px; }
+.file-list li.unread .meta { color: var(--them); }
 .file-list .btn, .eq-list .btn { padding: 2px 8px; font-size: 12px; }
 .eq-list li, .eq-sources details { background: var(--shell-2); border-radius: 6px; }
 .eq-list details > summary, .eq-sources summary { display: flex; gap: 8px; align-items: baseline; padding: 6px 9px; cursor: pointer; list-style: none; }
@@ -231,6 +233,27 @@ input[type="checkbox"] { accent-color: var(--them); width: 15px; height: 15px; }
 ::-webkit-scrollbar-thumb { background: var(--shell-3); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
 .card::-webkit-scrollbar-thumb { background: rgba(23, 34, 43, 0.25); background-clip: padding-box; }
 
+/* Answers given in the transcript, between what was said. */
+.line.answer { border-left-color: var(--rule); grid-template-columns: 48px 1fr; }
+.line.answer .who { color: var(--muted); }
+.line.answer summary { cursor: pointer; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line.answer details[open] summary { white-space: normal; color: var(--text); }
+.line.answer pre { margin: 4px 0 2px; white-space: pre-wrap; font: inherit; color: var(--text); }
+
+/* Earlier answers under the current one: only where there is room (the wide layout). */
+.log { display: none; }
+.log h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; }
+.log details { min-width: 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--shell-2); }
+.log summary { cursor: pointer; padding: 7px 10px; display: flex; gap: 8px; align-items: baseline; list-style: none; }
+.log summary::-webkit-details-marker { display: none; }
+.log summary time { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.log summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log details[open] summary span { white-space: normal; }
+.log .card { margin: 0 8px 8px; font-size: 15px; padding: 10px 14px; min-height: 0; overflow: visible; }
+.log .card .lead { font-size: 16px; }
+.log .card li { font-size: 14.5px; }
+.log .card pre { font-size: 13px; padding: 10px 12px; }
+
 /* Setting up (Knowledge or Settings open, nothing to answer yet): the empty answer area steps aside. */
 .setup .cue { display: none; }
 .setup .lower { border-top: 0; }
@@ -243,13 +266,18 @@ input[type="checkbox"] { accent-color: var(--them); width: 15px; height: 15px; }
 /* Maximised or wide: answer on the left, transcript and tools on the right. */
 @media (min-width: 900px) {
   main { flex-direction: row; }
-  .cue { max-height: none; flex: 1 1 55%; padding: 18px 20px; }
+  .cue { max-height: none; flex: 1 1 55%; min-width: 0; padding: 18px 20px; }
   .card { font-size: 20px; padding: 20px 26px; }
   .card .lead { font-size: 23px; }
   .card li { font-size: 18.5px; }
   .card pre { font-size: 15.5px; padding: 14px 18px; }
   .lower { flex: 1 1 45%; border-top: 0; border-left: 1px solid var(--rule); max-width: 620px; }
   .compact .cue { flex: 1 1 100%; }
+  /* Side by side there is room for both: the answer area stays while setting up. */
+  .setup .cue { display: flex; }
+  .log.has { display: flex; flex-direction: column; gap: 6px; flex: 1 1 0; min-height: 0; overflow-y: auto; margin-top: 10px; padding-right: 2px; }
+  .log #logList { display: flex; flex-direction: column; gap: 6px; }
+  .compact .log.has { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .card.wait::after { animation: none; content: "..."; }

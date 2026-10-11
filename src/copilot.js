@@ -26,6 +26,7 @@ class Copilot extends EventEmitter {
     this.abort = null;
     this.lastError = '';
     this.lastRun = null;
+    this.history = [];   // earlier questions and the answers suggested for them, oldest first
     this.speakingThem = false;
     this.generation = 0;
     this.sttTimeoutMs = 25000;
@@ -35,7 +36,7 @@ class Copilot extends EventEmitter {
   reset() {
     clearTimeout(this.timer);
     if (this.abort) this.abort.abort();
-    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null;
+    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null; this.history = [];
     this.pendingThem = 0; this.speakingThem = false;
     this.generation = (this.generation || 0) + 1; // segments still being transcribed belong to the old meeting
   }
@@ -191,13 +192,15 @@ class Copilot extends EventEmitter {
       // Retrieval: the question, plus a little context when the question alone is too thin to search on.
       let query = asked;
       if (mode === 'screen') query = `${question} ${this.screenText.slice(0, 500)}`;
-      else if (tokenize(asked).length < 4) {
+      else if (mode === 'typed' && tokenize(asked).length < 5 && this.history.length) {
+        query = `${asked} ${this.history[this.history.length - 1].question}`;
+      } else if (tokenize(asked).length < 4) {
         const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).map(e => e.text).join(' ');
         query = `${asked} ${prev}`;
       }
       const [local, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
-      const refs = [...live, ...local].slice(0, cfg.answerContext === 'lean' ? 3 : 7);
+      const refs = [...live, ...local].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
       this.emit('answer', {
         type: 'sources', id,
         sources: refs.map((r, i) => ({ n: i + 1, title: r.title, path: r.path, url: r.url, snippet: r.text.slice(0, 280) })),
@@ -220,6 +223,9 @@ class Copilot extends EventEmitter {
       }
       if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
       this.lastError = '';
+      // Remembered so a follow-up ("make it shorter", "and the second point?") has something to refer to.
+      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
+      if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
     } catch (e) {
@@ -239,7 +245,7 @@ class Copilot extends EventEmitter {
         vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
       } catch { /* fall back to keyword search */ }
     }
-    return this.kb.search(query, 6, vec);
+    return this.kb.search(query, 8, vec);
   }
 
   async _searchLive(query, cfg) {
@@ -265,24 +271,50 @@ class Copilot extends EventEmitter {
       '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named, then one or two spoken sentences on how it works, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
       'Grounding:',
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
+      '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
       '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',
       '- General knowledge (how something works, comparing tools, definitions): answer directly. No "Check:" line.',
       '- Personal facts the notes do not give (salary expectation, notice period, visa or relocation status, availability): never state one. Offer a neutral line the user can adapt and add "Check:".',
       '- When the pinned notes include a job description, agenda, brief or instructions for this meeting, shape the answer to them: lead with the experience, facts or skills they ask for, in their vocabulary, and follow any instructions on tone or length. A job description describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the user\'s own notes or references show it.',
+      '- A question may lean on what came before ("make it shorter", "why?", "and the second one?", "can you elaborate?"). Resolve it from the conversation and the earlier suggestions, stay consistent with what was already said, and do not repeat an earlier answer word for word.',
       '- The transcript comes from speech recognition and the screen text from OCR; both can contain errors. Read through obvious mis-hearings.',
       '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
     ].join('\n');
 
-    const convo = this.entries.filter(e => !e.pending).slice(lean ? -6 : -14)
-      .map(e => `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`).join('\n');
+    // The conversation so far, newest last, as much as fits: about ten minutes of talk
+    // normally, the last couple of minutes in lean mode.
+    const spoken = [];
+    let room = lean ? 1500 : 7000;
+    for (const e of this.entries.filter(x => !x.pending).reverse()) {
+      const line = `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`;
+      if (line.length > room && spoken.length) break;
+      spoken.unshift(line); room -= line.length;
+      if (room <= 0) break;
+    }
+    const convo = spoken.join('\n');
+    // What was already asked and suggested, so answers build on each other instead of starting
+    // over: as many exchanges as fit, newest first. The latest four keep most of their answer,
+    // older ones a shorter cut, so a whole interview's worth of questions stays in view.
+    const exchanges = [];
+    let budget = lean ? 700 : 12000;
+    for (let i = this.history.length - 1, n = 0; i >= 0; i--, n++) {
+      if (lean && exchanges.length) break; // lean mode carries only the latest exchange
+      const h = this.history[i];
+      const item = `Asked: ${h.question.slice(0, 300)}\nSuggested: ${h.answer.slice(0, lean ? 400 : n < 4 ? 700 : 250)}`;
+      if (item.length > budget && exchanges.length) break;
+      exchanges.unshift(item); budget -= item.length;
+      if (budget <= 0) break;
+    }
+    const earlier = exchanges.join('\n\n');
     const parts = [];
     // Notes sent with every answer: About me, CV, JD, Instructions, then pinned files from other sources.
     const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], lean ? { total: 6000, perNote: 2500 } : undefined)
       .filter(n => n.sent > 0).map(n => `### ${n.title}\n${n.text.slice(0, n.sent)}`);
     if (notes.length) parts.push(`Pinned notes from my sources (always included: who I am, my CV, the job description, instructions for this meeting):\n${notes.join('\n\n')}`);
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
+    if (earlier) parts.push(`Earlier in this meeting you suggested these answers (most recent last):\n${earlier}`);
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     if (refs.length) {
       parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, lean ? 800 : 1500)}`).join('\n\n'));
@@ -293,9 +325,13 @@ class Copilot extends EventEmitter {
     return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
   }
 
+  // The conversation as text, in order: what each side said and every answer suggested.
   transcriptText() {
-    return this.entries.filter(e => !e.pending)
-      .map(e => `[${new Date(e.t).toLocaleTimeString()}] ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}`).join('\n');
+    const at = (t) => `[${new Date(t).toLocaleTimeString()}]`;
+    const said = this.entries.filter(e => !e.pending).map(e => ({ t: e.t, text: `${at(e.t)} ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}` }));
+    const answers = this.history.map(h => ({ t: h.t || 0,
+      text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
+    return [...said, ...answers].sort((a, b) => a.t - b.t).map(x => x.text).join('\n');
   }
 }
 

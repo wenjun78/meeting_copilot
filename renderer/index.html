@@ -47,6 +47,10 @@
       <input id="askInput" type="text" placeholder="Ask your sources a question" aria-label="Ask your sources a question" autocomplete="off">
       <button class="btn" type="submit">Ask</button>
     </form>
+    <div class="log" id="log" aria-label="Earlier answers">
+      <h3>Earlier answers</h3>
+      <div id="logList"></div>
+    </div>
   </section>
 
   <section class="lower">
@@ -61,7 +65,7 @@
       <div class="lines" id="lines"></div>
       <p class="empty" id="linesEmpty">Nothing said yet. Start listening and both sides of the call appear here.</p>
       <div class="panel-foot">
-        <button id="exportBtn" class="btn quiet">Save transcript</button>
+        <button id="exportBtn" class="btn quiet" title="What both sides said and every answer suggested, as a text file">Save conversation log</button>
         <button id="resetBtn" class="btn quiet">Clear for a new meeting</button>
       </div>
     </div>
@@ -78,6 +82,7 @@
         <button role="tab" data-view="cv" aria-selected="false">CV</button>
         <button role="tab" data-view="jd" aria-selected="false">JD</button>
         <button role="tab" data-view="instructions" aria-selected="false">Instructions</button>
+        <button role="tab" data-view="publications" aria-selected="false">Publications</button>
         <button role="tab" data-view="portfolio" aria-selected="false">Portfolio</button>
         <button role="tab" data-view="equipped" aria-selected="false">Equipped</button>
       </div>
@@ -103,10 +108,9 @@
         </div>
         <div class="row">
           <button id="kbFolder" class="btn quiet" type="button">Add a folder</button>
-          <button id="kbSyncAll" class="btn quiet" type="button">Sync all now</button>
           <span class="kb-status" id="kbStatus"></span>
         </div>
-        <label class="check"><input id="kbAuto" type="checkbox"> Keep sources up to date automatically</label>
+        <label class="check" title="Checked when the app opens, every 30 minutes, and when you start listening"><input id="kbAuto" type="checkbox"> Keep repositories and web pages up to date automatically</label>
         <ul class="kb-list" id="kbList"></ul>
         <ul class="file-list" id="portfolioFiles"></ul>
         <p class="empty" id="kbEmpty">Nothing here yet. Add a GitHub repository, a username to pull every repo you own, your portfolio site, or files and folders.</p>
@@ -134,7 +138,10 @@
           <legend>Model service</legend>
           <label>Service <select id="s-service"><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom">Another OpenAI-compatible service</option></select></label>
           <label>API key <input id="s-llm-key" type="password"></label>
-          <label>Model that writes the answers <input id="s-llm-model" type="text"></label>
+          <p class="hint" id="keyState"></p>
+          <label>Model that writes the answers <input id="s-llm-model" type="text" list="modelChoices"></label>
+          <datalist id="modelChoices"></datalist>
+          <p class="hint" id="modelHint"></p>
           <label>Model that turns speech into text <input id="s-stt-model" type="text"></label>
           <label id="s-llm-base-row">API address <input id="s-llm-base" type="text" placeholder="https://api.openai.com/v1"></label>
           <label>Spoken language <input id="s-stt-lang" type="text" placeholder="Detect automatically (or en, zh, ms ...)"></label>

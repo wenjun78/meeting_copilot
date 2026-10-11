@@ -98,8 +98,10 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const jdAdd = await js(`window.mc.call('slot:addFiles', 'jd', ${JSON.stringify([path.join(drop, 'role.md')])})`);
     await openSection('cv');
     const cvFiles = await js(`[...document.querySelectorAll('#slotFiles .name')].map(n => n.textContent)`);
+    const cvMeta = await js(`[...document.querySelectorAll('#slotFiles .meta')].map(n => n.textContent)`);
     await shot('2a-cv-section');
-    step('files in sections', { cvAdded: cvAdd.value.added, skipped: cvAdd.value.skipped, jdAdded: jdAdd.value.added, cvFilesShown: cvFiles });
+    step('files in sections', { cvAdded: cvAdd.value.added, skipped: cvAdd.value.skipped, jdAdded: jdAdd.value.added, cvFilesShown: cvFiles, cvMeta });
+    if (!/passages? read/.test(cvMeta.join())) throw new Error('the file row does not say how much was read');
     if (cvFiles.join() !== 'my cv.docx' || cvAdd.value.skipped.join() !== 'photo.png' || jdAdd.value.added.join() !== 'role.md') throw new Error('adding files to a section did not behave as expected');
 
     // Portfolio: a repository by its GitHub Pages address, a dropped folder, a loose file.
@@ -108,11 +110,36 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const folder = path.join(drop, 'side-project');
     fs.mkdirSync(folder); fs.writeFileSync(path.join(folder, 'notes.md'), '# Serengeti rollout\n\nRolled out to nine regions.');
     fs.writeFileSync(path.join(drop, 'talk.md'), '# Conference talk\n\nSpoke about feature stores.');
-    const pfAdd = await js(`window.mc.call('slot:addFiles', 'portfolio', ${JSON.stringify([folder, path.join(drop, 'talk.md')])})`);
+    // A paper saved under a meaningless name, and a PDF with no readable text.
+    const paper = '5f6f95d7-dbfd-4264-bb64-b633e88df350.pdf';
+    fs.copyFileSync(path.join(__dirname, 'fixtures', '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf'), path.join(drop, paper));
+    fs.writeFileSync(path.join(drop, 'scan.pdf'), '%PDF-1.4 nothing readable');
+    const pfAdd = await js(`window.mc.call('slot:addFiles', 'portfolio', ${JSON.stringify([folder, path.join(drop, 'talk.md'), path.join(drop, paper), path.join(drop, 'scan.pdf')])})`);
     await openSection('portfolio');
-    await waitFor('portfolio lists', () => js(`document.querySelectorAll('#kbList li').length === 2 && document.querySelectorAll('#portfolioFiles li').length === 1`));
+    await waitFor('portfolio lists', () => js(`document.querySelectorAll('#kbList li').length === 2 && document.querySelectorAll('#portfolioFiles li').length === 3`));
+    const rows = await js(`[...document.querySelectorAll('#portfolioFiles li')].map(li => ({ name: li.querySelector('.name').textContent, meta: li.querySelector('.meta').textContent, unread: li.classList.contains('unread') }))`);
+    const found = kb.search('Tell me about your publication', 2)[0];
+    step('publication', { rows, topHitForPublication: found && found.title });
+    const paperRow = rows.find(r => r.name === paper), scanRow = rows.find(r => r.name === 'scan.pdf');
+    if (!paperRow || !/^Publication: Predicting shipment delays.*passages read$/.test(paperRow.meta) || !scanRow || !scanRow.unread || !/^Publication \(research paper\)/.test(found.title)) throw new Error('the publication was not read, named or found as expected');
     step('portfolio', { pages: viaPages.ok, sources: await js(`[...document.querySelectorAll('#kbList .label')].map(n => n.textContent)`), files: await js(`[...document.querySelectorAll('#portfolioFiles .name')].map(n => n.textContent)`), added: pfAdd.value.added, folders: pfAdd.value.folders });
     await shot('2b-portfolio');
+
+    // Publications: the paper goes in its own section, is searched by section, and its
+    // abstract is among what goes with every answer. "Sync all" is gone from Portfolio.
+    await openSection('publications');
+    await js(`window.mc.call('slot:removeFile', 'portfolio', ${JSON.stringify(paper)})`);
+    const pubAdd = await js(`window.mc.call('slot:addFiles', 'publications', ${JSON.stringify([path.join(drop, paper)])})`);
+    await openSection('publications');
+    const pubRows = await js(`[...document.querySelectorAll('#slotFiles li')].map(li => ({ name: li.querySelector('.name').textContent, meta: li.querySelector('.meta').textContent }))`);
+    const methods = kb.search('i mean publication methodology', 8).map(h => h.title.replace(/^.* — /, ''));
+    const briefs = kb.pinned().filter(p => p.slot === 'publications').map(p => ({ title: p.title, chars: p.text.length }));
+    const syncAllGone = await js(`!document.getElementById('kbSyncAll')`);
+    await shot('2c-publications');
+    step('publications section', { added: pubAdd.value.added, rows: pubRows, methods, briefs, syncAllGone, selected: await selected() });
+    if (pubRows.length !== 1 || !/^Publication: Predicting shipment delays.*passages read$/.test(pubRows[0].meta)) throw new Error('the paper is not listed under Publications');
+    if (!methods.includes('Methods > Model') || !methods.includes('Methods > Data')) throw new Error('a methodology question does not reach the Methods section');
+    if (briefs.length !== 1 || !/^Publication: Predicting shipment delays/.test(briefs[0].title) || briefs[0].chars > 1500 || !syncAllGone) throw new Error('the abstract is not sent with every answer, or Sync all is still there');
 
     // Equipped: what goes with every answer, and every searchable file.
     await openSection('equipped');
@@ -237,10 +264,38 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=transcript]').click()`);
     win.setBounds({ x: 0, y: 0, width: 1500, height: 860 });
     await new Promise(r => setTimeout(r, 500));
+    // Conversation log: earlier answers sit under the current one in the wide layout, every
+    // answer is in the transcript where it was given, and the saved log carries them too.
+    await js(`document.querySelector('#logList details').open = true`);
+    await new Promise(r => setTimeout(r, 200));
     await shot('8-wide');
+    const log = {
+      shown: await js(`getComputedStyle(document.getElementById('log')).display`),
+      earlier: await js(`[...document.querySelectorAll('#logList details')].map(d => ({ asked: d.querySelector('summary span').textContent, answer: d.querySelector('.card').innerText.slice(0, 60) }))`),
+      onCard: await js(`document.getElementById('asked').textContent`),
+      inTranscript: await js(`[...document.querySelectorAll('.line.answer summary')].map(n => n.textContent)`),
+      saved: copilot.transcriptText().split('\n').filter(l => /Suggested answer|^\[.*\] Them:/.test(l)).map(l => l.replace(/^\[[^\]]*\] /, '')).slice(0, 4),
+    };
+    step('conversation log', log);
+    if (log.shown !== 'flex' || !log.earlier.length || !/duplicate/i.test(log.earlier[log.earlier.length - 1].asked) || log.earlier.some(x => x.asked === log.onCard) || log.inTranscript.length < 2 || !log.saved.some(l => /^Suggested answer/.test(l))) throw new Error('the conversation log is missing answers');
 
     await js(`document.getElementById('toggle').click()`);
     await waitFor('stopped', () => js(`!document.body.classList.contains('listening')`));
+
+    // Nothing to answer and Knowledge open: side by side the answer area stays; in the
+    // narrow window it steps aside. Clearing the meeting empties the log.
+    await js(`document.getElementById('resetBtn').click()`);
+    await waitFor('cleared', () => js(`document.getElementById('card').classList.contains('idle') && !document.querySelector('.line')`));
+    await js(`document.querySelector('[data-tab=knowledge]').click()`);
+    await new Promise(r => setTimeout(r, 400));
+    const cueOf = () => js(`getComputedStyle(document.querySelector('.cue')).display`);
+    const wide = { setup: await js(`document.body.classList.contains('setup')`), cue: await cueOf(), log: await js(`getComputedStyle(document.getElementById('log')).display`) };
+    await shot('9-wide-knowledge');
+    win.setBounds({ x: 0, y: 0, width: 440, height: 700 });
+    await new Promise(r => setTimeout(r, 500));
+    const narrow = { cue: await cueOf() };
+    step('answer area while setting up', { wide, narrow });
+    if (!wide.setup || wide.cue !== 'flex' || wide.log !== 'none' || narrow.cue !== 'none') throw new Error('the answer area is not kept in the wide layout while setting up');
     result.ok = true;
     clearTimeout(timer);
     finish();

@@ -4,12 +4,14 @@ const path = require('path');
 
 // The sections of what a user gives the app. Each is a folder among the app's own files:
 // the text typed into the section is saved as NOTE, files added to it sit beside that.
-// Everything outside Portfolio is sent to the model with every answer; Portfolio is searched.
+// About me, CV, JD and Instructions are sent to the model with every answer. Publications are
+// searched by section, with each paper's title and abstract sent every time. Portfolio is searched.
 const SLOTS = [
   { id: 'about', dir: 'about-me', label: 'About me', title: 'About me' },
   { id: 'cv', dir: 'cv', label: 'CV', title: 'CV' },
   { id: 'jd', dir: 'jd', label: 'JD', title: 'Job description' },
   { id: 'instructions', dir: 'instructions', label: 'Instructions', title: 'Instructions for this meeting' },
+  { id: 'publications', dir: 'publications', label: 'Publications', title: 'Publication', papers: true },
   { id: 'portfolio', dir: 'portfolio', label: 'Portfolio', title: 'Portfolio', searched: true },
 ];
 const NOTE = '_note.md';
@@ -28,6 +30,27 @@ function planPinned(notes, { total = 20000, perNote = 8000 } = {}) {
     room -= sent;
     return { ...n, sent };
   });
+}
+
+// Papers that were added to Portfolio before there was a Publications section are moved to it,
+// once: the Publications folder existing means this has been done.
+// isPaper(fullPath) -> Promise<boolean>. -> names of the files moved.
+async function movePapersToPublications(notesDir, isPaper) {
+  const from = path.join(notesDir, slotById('portfolio').dir), to = path.join(notesDir, slotById('publications').dir);
+  if (fs.existsSync(to)) return [];
+  let names = [];
+  try { names = fs.readdirSync(from, { withFileTypes: true }).filter(e => e.isFile() && /\.(pdf|docx)$/i.test(e.name)).map(e => e.name); } catch { /* no Portfolio files */ }
+  if (!fs.existsSync(notesDir)) return [];
+  fs.mkdirSync(to, { recursive: true });
+  const moved = [];
+  for (const name of names) {
+    let paper = false;
+    try { paper = await isPaper(path.join(from, name)); } catch { /* unreadable: stays where it is */ }
+    if (!paper) continue;
+    fs.renameSync(path.join(from, name), path.join(to, name));
+    moved.push(name);
+  }
+  return moved;
 }
 
 // Earlier versions kept notes loose in one folder and decided their use by name. Each loose
@@ -63,4 +86,4 @@ function moveLooseFilesIntoSections(notesDir) {
   return moved;
 }
 
-module.exports = { SLOTS, NOTE, slotById, slotByDir, planPinned, moveLooseFilesIntoSections };
+module.exports = { SLOTS, NOTE, slotById, slotByDir, planPinned, moveLooseFilesIntoSections, movePapersToPublications };

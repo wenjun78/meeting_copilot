@@ -1,7 +1,7 @@
 'use strict';
 const { readTarGz } = require('./tar');
 const { readNote, isIndexable } = require('./chunker');
-const { extractText } = require('./extract');
+const { extractDoc } = require('./extract');
 
 // Accepts "owner", "owner/repo", "owner/repo@ref", "owner/repo/sub/dir", a github.com URL or a GitHub Pages address.
 function parseRepoSpec(spec) {
@@ -81,11 +81,11 @@ async function fetchRepo(spec, { token, fetchFn = fetch, apiBase = 'https://api.
     if (!path) continue;
     if (subdir && !(path === subdir || path.startsWith(subdir + '/'))) continue;
     if (!isIndexable(path, entry.size) || files >= maxFiles) { skipped++; continue; }
-    const text = await extractText(path, entry.data);
+    const { text, name } = await extractDoc(path, entry.data);
     if (!text.trim()) { skipped++; continue; }
     files++;
     const fileUrl = `${htmlUrl}/blob/${ref}/${path.split('/').map(encodeURIComponent).join('/')}`;
-    const note = readNote(path, text);
+    const note = readNote(path, text, { name });
     for (const c of note.chunks) {
       chunks.push({ path: `${repo}/${path}`, url: c.line ? `${fileUrl}#L${c.line}` : fileUrl, title: c.title, text: c.text });
     }

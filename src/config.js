@@ -10,7 +10,8 @@ const DEFAULTS = {
   autoSync: true,                     // re-read sources in the background when they change
   answerLength: 'short',              // 'short' | 'detailed'
   answerContext: 'full',              // 'full' | 'lean' (less sent per answer, for services with tight token limits)
-  llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-5.6-sol', extra: { reasoning_effort: 'low' } },
+  defaults: 2,                        // which set of defaults these settings were last brought up to
+  llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-6.1-sol', extra: { reasoning_effort: 'low' } },
   stt: { baseUrl: '', apiKey: '', model: 'gpt-4o-transcribe', language: '', vocabulary: '' },
   embed: { baseUrl: '', apiKey: '', model: '' },
   github: { token: '', apiBase: 'https://api.github.com' },
@@ -45,6 +46,10 @@ class ConfigStore {
         try { raw[a][b] = this.crypto ? this.crypto.decrypt(v.slice(4)) : ''; } catch { raw[a][b] = ''; }
       }
     }
+    // The answer model that used to be the default moves to the current one, once; a model
+    // chosen after that is left alone.
+    if ((raw.defaults || 1) < 2 && raw.llm && raw.llm.model === 'gpt-5.6-sol') raw.llm.model = 'gpt-6.1-sol';
+    raw.defaults = DEFAULTS.defaults;
     this.data = merge(DEFAULTS, raw);
     // `extra` is free-form: keep exactly what the user saved, including {}.
     if (raw.llm && raw.llm.extra && typeof raw.llm.extra === 'object') this.data.llm.extra = raw.llm.extra;
