@@ -98,6 +98,16 @@ small or low-contrast text can come out garbled (check the Screen tab); and
 this app's own window is blanked out of the capture so it never reads its
 own answers.
 
+## What an answer remembers
+
+The model itself keeps nothing between questions, so the app sends the
+context each time: your always-sent notes, the conversation so far (about
+the last ten minutes, both sides), the last few questions with the answers
+it suggested, the shared-screen text, and the best-matching passages. That
+is why "make it shorter" or "can you elaborate?" works. "Clear for a new
+meeting" forgets the conversation and the earlier suggestions; your notes
+stay.
+
 ## Which model service
 
 | | Groq, free plan | Groq, pay as you go | OpenAI |

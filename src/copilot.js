@@ -26,6 +26,7 @@ class Copilot extends EventEmitter {
     this.abort = null;
     this.lastError = '';
     this.lastRun = null;
+    this.history = [];   // earlier questions and the answers suggested for them, oldest first
     this.speakingThem = false;
     this.generation = 0;
     this.sttTimeoutMs = 25000;
@@ -35,7 +36,7 @@ class Copilot extends EventEmitter {
   reset() {
     clearTimeout(this.timer);
     if (this.abort) this.abort.abort();
-    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null;
+    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null; this.history = [];
     this.pendingThem = 0; this.speakingThem = false;
     this.generation = (this.generation || 0) + 1; // segments still being transcribed belong to the old meeting
   }
@@ -191,7 +192,9 @@ class Copilot extends EventEmitter {
       // Retrieval: the question, plus a little context when the question alone is too thin to search on.
       let query = asked;
       if (mode === 'screen') query = `${question} ${this.screenText.slice(0, 500)}`;
-      else if (tokenize(asked).length < 4) {
+      else if (mode === 'typed' && tokenize(asked).length < 5 && this.history.length) {
+        query = `${asked} ${this.history[this.history.length - 1].question}`;
+      } else if (tokenize(asked).length < 4) {
         const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).map(e => e.text).join(' ');
         query = `${asked} ${prev}`;
       }
@@ -220,6 +223,9 @@ class Copilot extends EventEmitter {
       }
       if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
       this.lastError = '';
+      // Remembered so a follow-up ("make it shorter", "and the second point?") has something to refer to.
+      this.history.push({ mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
+      if (this.history.length > 8) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
     } catch (e) {
@@ -271,18 +277,32 @@ class Copilot extends EventEmitter {
       '- General knowledge (how something works, comparing tools, definitions): answer directly. No "Check:" line.',
       '- Personal facts the notes do not give (salary expectation, notice period, visa or relocation status, availability): never state one. Offer a neutral line the user can adapt and add "Check:".',
       '- When the pinned notes include a job description, agenda, brief or instructions for this meeting, shape the answer to them: lead with the experience, facts or skills they ask for, in their vocabulary, and follow any instructions on tone or length. A job description describes what the other side wants, not what the user has done: never present one of its requirements as the user\'s experience unless the user\'s own notes or references show it.',
+      '- A question may lean on what came before ("make it shorter", "why?", "and the second one?", "can you elaborate?"). Resolve it from the conversation and the earlier suggestions, stay consistent with what was already said, and do not repeat an earlier answer word for word.',
       '- The transcript comes from speech recognition and the screen text from OCR; both can contain errors. Read through obvious mis-hearings.',
       '- If the other side did not actually ask for anything, give one sentence the user could use to acknowledge or move the conversation forward.',
     ].join('\n');
 
-    const convo = this.entries.filter(e => !e.pending).slice(lean ? -6 : -14)
-      .map(e => `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`).join('\n');
+    // The conversation so far, newest last, as much as fits: about ten minutes of talk
+    // normally, the last couple of minutes in lean mode.
+    const spoken = [];
+    let room = lean ? 1500 : 7000;
+    for (const e of this.entries.filter(x => !x.pending).reverse()) {
+      const line = `${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}`;
+      if (line.length > room && spoken.length) break;
+      spoken.unshift(line); room -= line.length;
+      if (room <= 0) break;
+    }
+    const convo = spoken.join('\n');
+    // What was already asked and suggested, so answers build on each other instead of starting over.
+    const earlier = this.history.slice(lean ? -1 : -4)
+      .map(h => `Asked: ${h.question.slice(0, 300)}\nSuggested: ${h.answer.slice(0, lean ? 400 : 700)}`).join('\n\n');
     const parts = [];
     // Notes sent with every answer: About me, CV, JD, Instructions, then pinned files from other sources.
     const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], lean ? { total: 6000, perNote: 2500 } : undefined)
       .filter(n => n.sent > 0).map(n => `### ${n.title}\n${n.text.slice(0, n.sent)}`);
     if (notes.length) parts.push(`Pinned notes from my sources (always included: who I am, my CV, the job description, instructions for this meeting):\n${notes.join('\n\n')}`);
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
+    if (earlier) parts.push(`Earlier in this meeting you suggested these answers (most recent last):\n${earlier}`);
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     if (refs.length) {
       parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, lean ? 800 : 1500)}`).join('\n\n'));

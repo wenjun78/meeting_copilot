@@ -675,3 +675,26 @@ test('the inventory lists every searchable file with its passages, and returns a
   assert.match(kb.fileText(inv[0].id, 'Portfolio/project notes.md'), /Moved 40 jobs to Airflow/);
   assert.ok(kb.pinned().every(p => p.sourceId), 'pinned notes know their source, so their text can be shown');
 });
+
+test('answers remember the meeting: earlier questions and suggestions, and a long conversation', async () => {
+  const { co, chats } = scripted({ answer: 'I cut load time from six hours to forty minutes [1].' });
+  await co.answer({ mode: 'typed', question: 'What was your biggest win on the ETL pipeline?' });
+  assert.ok(!/Earlier in this meeting/.test(chats[0]), 'nothing to remember on the first question');
+  await co.answer({ mode: 'typed', question: 'Make it shorter.' });
+  assert.match(chats[1], /Earlier in this meeting you suggested these answers[^\n]*\nAsked: What was your biggest win on the ETL pipeline\?\nSuggested: I cut load time from six hours to forty minutes/);
+  assert.match(chats[1], /My question: Make it shorter\./);
+
+  // Forty utterances are all still there when the next question comes; clearing the meeting forgets everything.
+  for (let i = 0; i < 40; i++) co.entries.push({ id: 100 + i, who: i % 2 ? 'you' : 'them', text: `Point number ${i} about the migration.`, t: Date.now(), dur: 1000, pending: false });
+  await co.answer({ mode: 'typed', question: 'What did they say first?' });
+  assert.match(chats[2], /Them: Point number 0 about the migration\./);
+  assert.match(chats[2], /Me: Point number 39 about the migration\./);
+  co.getConfig().answerContext = 'lean';
+  await co.answer({ mode: 'typed', question: 'And in lean mode?' });
+  assert.ok(!/Point number 0 about/.test(chats[3]) && /Point number 39 about/.test(chats[3]), 'lean keeps only the most recent part');
+  assert.equal((chats[3].match(/^Asked: /gm) || []).length, 1, 'lean carries one earlier suggestion');
+  co.reset();
+  co.getConfig().answerContext = 'full';
+  await co.answer({ mode: 'typed', question: 'Fresh start?' });
+  assert.ok(!/Earlier in this meeting|Point number/.test(chats[4]));
+});

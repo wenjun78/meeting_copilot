@@ -534,6 +534,8 @@ function fillSettings() {
   const keyHint = (has) => (has ? 'Saved. Type to replace.' : '');
   $('s-llm-base').value = c.llm.baseUrl; $('s-llm-model').value = c.llm.model; $('s-llm-key').placeholder = keyHint(s.llmKey) || 'Paste your API key';
   $('s-service').value = serviceOf(c.llm.baseUrl); showService();
+  $('keyState').textContent = s.llmKey ? 'A key is saved on this computer and stays until you replace it.' : 'No key saved yet. Paste one and press Save settings.';
+  $('keyState').classList.toggle('warn', !s.llmKey);
   $('s-llm-extra').value = JSON.stringify(c.llm.extra || {});
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = c.stt.language; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
@@ -577,6 +579,8 @@ $('s-service').addEventListener('change', () => {
     $('s-llm-base').value = svc.baseUrl; $('s-llm-model').value = svc.model; $('s-stt-model').value = svc.stt;
     $('s-llm-extra').value = JSON.stringify(svc.extra);
     $('s-llm-key').placeholder = 'Paste the key for this service'; // the saved key belongs to the previous service
+    $('keyState').textContent = 'The saved key belongs to the service you had before. Paste the key for this one, then Save settings.';
+    $('keyState').classList.add('warn');
   }
   showService();
 });
