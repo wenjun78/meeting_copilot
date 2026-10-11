@@ -59,6 +59,10 @@ test('parseRepoSpec accepts the common ways of naming a repo', () => {
   assert.deepEqual(parseRepoSpec('wj/etl@dev'), { owner: 'wj', repo: 'etl', ref: 'dev', subdir: '' });
   assert.deepEqual(parseRepoSpec('https://github.com/wj/etl/tree/main/docs/api'), { owner: 'wj', repo: 'etl', ref: 'main', subdir: 'docs/api' });
   assert.deepEqual(parseRepoSpec('https://github.com/wj/etl.git'), { owner: 'wj', repo: 'etl', ref: '', subdir: '' });
+  assert.deepEqual(parseRepoSpec('https://wenjun78.github.io/portfolio/'), { owner: 'wenjun78', repo: 'portfolio', ref: '', subdir: '' });
+  assert.deepEqual(parseRepoSpec('https://wenjun78.github.io/FIFA/RefVision/docs/refvision.html'), { owner: 'wenjun78', repo: 'FIFA', ref: '', subdir: '' });
+  assert.equal(parseRepoSpec('https://wenjun78.github.io/').repo, 'wenjun78.github.io');
+  assert.equal(parseRepoSpec('https://wenjun78.github.io/index.html').repo, 'wenjun78.github.io');
   assert.equal(parseRepoSpec('wj').repo, '');
   assert.throws(() => parseRepoSpec('not a repo!'));
 });

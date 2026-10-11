@@ -68,6 +68,11 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=knowledge]').click()`);
     await waitFor('kb list', () => js(`document.querySelectorAll('#kbList li').length === 1`));
 
+    // A GitHub Pages address typed into the Add box is read as the repository behind the site.
+    const viaPages = await js(`window.mc.call('kb:add', 'https://wj.github.io/etl-pipeline/')`);
+    step('pages address', { ok: viaPages.ok, error: viaPages.error, added: viaPages.value, sources: Object.keys(kb.sources) });
+    if (!viaPages.ok || Object.keys(kb.sources).join() !== 'github:wj/etl-pipeline') throw new Error('a GitHub Pages address was not resolved to its repository');
+
     // Files handed to the app directly: copied into its own folder, indexed, and pinned by name.
     const os = require('os');
     const drop = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-drop-'));

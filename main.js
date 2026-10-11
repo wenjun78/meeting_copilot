@@ -323,13 +323,21 @@ function wireIpc() {
 
   handle('update:check', () => checkForUpdate({ manual: true }));
   handle('kb:stats', () => kb.stats());
-  handle('kb:add', (text) => {
+  handle('kb:add', async (text) => {
     const spec = String(text || '').trim();
     if (!spec) throw new Error('Enter a GitHub repository (owner/repo) or a URL.');
     if (/^https?:\/\/([\w-]+\.)?linkedin\.com\//i.test(spec)) {
       throw new Error('LinkedIn does not let apps read profiles. On your profile choose More > Save to PDF, then add that file with "Add files".');
     }
-    const isUrl = /^https?:\/\//i.test(spec) && !/^https?:\/\/(www\.)?github\.com\//i.test(spec);
+    const pagesSite = /^https?:\/\/[\w-]+\.github\.io(\/|$)/i.test(spec);
+    const isUrl = /^https?:\/\//i.test(spec) && !pagesSite && !/^https?:\/\/(www\.)?github\.com\//i.test(spec);
+    if (pagesSite) {
+      // Read the whole repository behind a GitHub Pages site; if it cannot be found under the
+      // expected name, fall back to reading the one page at that address.
+      const { owner, repo } = github.parseRepoSpec(spec);
+      try { return await syncOrigin({ kind: 'github', spec: `${owner}/${repo}` }); }
+      catch (e) { if (!/not found/i.test(e.message)) throw e; return syncOrigin({ kind: 'url', spec }); }
+    }
     return syncOrigin({ kind: isUrl ? 'url' : 'github', spec });
   });
   handle('kb:addFolder', async () => {
