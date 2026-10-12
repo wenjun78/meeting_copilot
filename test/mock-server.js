@@ -35,9 +35,16 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-0
         if (req.headers.authorization !== 'Bearer test-key') return json(401, { error: { message: 'bad key' } });
         if (sttBusy-- > 0) { res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '1' }); return res.end(JSON.stringify({ error: { message: 'slow down' } })); }
         const text = body.toString('latin1');
-        log.stt.push({ bytes: body.length, hasWav: text.includes('RIFF'), prompt: (/name="prompt"\r\n\r\n([^\r]*)/.exec(text) || [])[1] || '', model: (/name="model"\r\n\r\n([^\r]*)/.exec(text) || [])[1] });
-        const line = sttLines[sttIndex++ % sttLines.length];
-        return json(200, { text: line, segments: [{ text: line, no_speech_prob: 0.01, avg_logprob: -0.2 }] });
+        const field = (name) => (new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`).exec(text) || [])[1] || '';
+        const asked = { bytes: body.length, hasWav: text.includes('RIFF'), prompt: Buffer.from(field('prompt'), 'latin1').toString('utf8'), model: field('model'), language: field('language'), format: field('response_format') };
+        log.stt.push(asked);
+        if (asked.model === 'plain-json-stt' && asked.format === 'verbose_json') return json(400, { error: { message: 'response_format verbose_json is not supported' } });
+        // A line is text, {text, language}, or a function of the request (to answer by language).
+        let line = sttLines[sttIndex++ % sttLines.length];
+        if (typeof line === 'function') line = line(asked);
+        if (typeof line === 'string') line = { text: line };
+        if (asked.format !== 'verbose_json') return json(200, { text: line.text });
+        return json(200, { text: line.text, ...(line.language ? { language: line.language } : {}), segments: [{ text: line.text, no_speech_prob: 0.01, avg_logprob: -0.2 }] });
       }
       if (url.pathname === '/v1/chat/completions') {
         const payload = JSON.parse(body.toString());

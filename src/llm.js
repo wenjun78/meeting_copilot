@@ -15,6 +15,38 @@ function friendlyError(status, body, what) {
   return `${what} failed (${status}). ${msg}`.trim();
 }
 
+// Speech is transcribed as English, Mandarin, or either of the two. Limiting it to these keeps
+// accented English from being written down as another language.
+const speechLanguage = (v) => (v === 'en' || v === 'zh' ? v : 'en+zh');
+const LANGUAGE_HINT = {
+  en: 'This meeting is in English.',
+  zh: '这场会议使用普通话，请用简体中文。',
+  'en+zh': 'This meeting is in English and Mandarin Chinese. 这场会议使用英语和普通话。',
+};
+// Words that mark a sentence as English; ones shared with other languages ("a", "no", "me") are left out.
+const ENGLISH = new Set(("the and is are was were to of for with from this that these those you they my your our their does did have has had " +
+  "can could would should will not yes if then there here what which who when where why how about just like know think going get got it be been at by but we i " +
+  "i'm it's don't that's i've we're you're can't didn't").split(' '));
+const OTHER_SCRIPT = /[Ͱ-ϿЀ-ԯ֐-ݏऀ-෿฀-໿က-႟぀-ヿㇰ-ㇿ가-힯]/; // Greek, Cyrillic, Hebrew, Arabic, Indic, Thai, Lao, Burmese, kana, Hangul
+const EAST_ASIAN = /[぀-ヿㇰ-ㇿ가-힯一-鿿]/;
+
+// With English and Mandarin both allowed: '' when the text is in one of them, otherwise the
+// language to transcribe the audio in again ('zh' when it came out in an East Asian script
+// or language, 'en' for anything else).
+function languageToForce(text, detected = '') {
+  const lang = detected.toLowerCase();
+  const named = lang ? (/^(en|english)$/.test(lang) ? 'en' : /^(zh|cmn|chinese|mandarin)/.test(lang) ? 'zh' : 'other') : '';
+  if (OTHER_SCRIPT.test(text)) return EAST_ASIAN.test(text) ? 'zh' : 'en';
+  if (named === 'other') return /^(ja|ko|yue|japanese|korean|cantonese|vietnamese|vi|wuu|nan|hak)/.test(lang) || EAST_ASIAN.test(text) ? 'zh' : 'en';
+  if (named) return '';
+  // No language reported: Chinese characters are Mandarin; Latin text has to read as English.
+  if (/[一-鿿]/.test(text)) return '';
+  const words = text.toLowerCase().match(/[a-z']+/g) || [];
+  if (words.length < 5) return '';
+  let common = 0; for (const w of words) if (ENGLISH.has(w)) common++;
+  return common / words.length >= 0.15 ? '' : 'en';
+}
+
 class LLM {
   // getConfig() -> { llm:{baseUrl,apiKey,model,extra}, stt:{...}, embed:{...} }
   constructor(getConfig, fetchFn = fetch) { this.getConfig = getConfig; this.fetch = fetchFn; }
@@ -35,13 +67,18 @@ class LLM {
   }
 
   // wav: Buffer (16 kHz mono PCM16). Returns the cleaned text ('' when nothing was said).
+  // Speech is read as English or Mandarin only (see speechLanguage). With both allowed the
+  // service picks between them per sentence; when what comes back is in neither (a sentence
+  // heard as Malay, Japanese, Korean ...), the same audio is sent once more with the language
+  // fixed, so the words come out in the language that was spoken.
   async transcribe(wav, { prompt = '', signal } = {}) {
     const { base, key, model, own } = this._endpoint('stt');
-    const send = async (format) => {
+    const mode = speechLanguage(own.language);
+    const send = async (format, language) => {
       const boundary = '----mc' + Math.random().toString(16).slice(2) + Date.now().toString(16);
       const fields = { model: model || 'whisper-large-v3', response_format: format, temperature: '0' };
-      if (own.language) fields.language = own.language;
-      if (prompt) fields.prompt = prompt;
+      if (language) fields.language = language;
+      fields.prompt = [LANGUAGE_HINT[language || mode], prompt].filter(Boolean).join(' ');
       const parts = [];
       for (const [k, v] of Object.entries(fields)) parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
       parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n`));
@@ -51,19 +88,36 @@ class LLM {
         headers: this._headers(key, { 'Content-Type': `multipart/form-data; boundary=${boundary}` }),
       });
     };
-    let format = 'verbose_json';
-    let res = await send(format);
-    if (res.status === 400) res = await send((format = 'json')); // endpoint without verbose_json support
-    if (res.status === 429 || res.status >= 500) {
-      // Busy or rate-limited: wait briefly and try once more rather than lose the sentence.
-      const wait = Math.min(6000, (Number(res.headers.get('retry-after')) || 1.5) * 1000);
-      await new Promise(r => setTimeout(r, this.retryDelayMs ?? wait));
-      res = await send(format);
-    }
-    const body = await res.text();
-    if (!res.ok) throw new Error(friendlyError(res.status, body, 'Transcription'));
-    let data; try { data = JSON.parse(body); } catch { data = { text: body }; }
-    return cleanTranscript(data);
+    // Which reply format this model takes is learned once, not asked again for every sentence.
+    this._sttFormat = this._sttFormat || {};
+    const formatKey = `${base}|${model}`;
+    const once = async (language) => {
+      let format = this._sttFormat[formatKey] || 'verbose_json';
+      let res = await send(format, language);
+      if (res.status === 400 && format === 'verbose_json') { // endpoint without verbose_json support
+        res = await send((format = 'json'), language);
+        if (res.ok) this._sttFormat[formatKey] = 'json';
+      }
+      if (res.status === 429 || res.status >= 500) {
+        // Busy or rate-limited: wait briefly and try once more rather than lose the sentence.
+        const wait = Math.min(6000, (Number(res.headers.get('retry-after')) || 1.5) * 1000);
+        await new Promise(r => setTimeout(r, this.retryDelayMs ?? wait));
+        res = await send(format, language);
+      }
+      const body = await res.text();
+      if (!res.ok) throw new Error(friendlyError(res.status, body, 'Transcription'));
+      let data; try { data = JSON.parse(body); } catch { data = { text: body }; }
+      const text = cleanTranscript(data);
+      // The hint itself coming back means nothing was said.
+      const bare = text.replace(/[.。!！?？\s]+$/u, '').toLowerCase();
+      const echoed = bare.length >= 10 && LANGUAGE_HINT[language || mode].toLowerCase().includes(bare);
+      return { text: echoed ? '' : text, language: String(data.language || '') };
+    };
+    if (mode !== 'en+zh') return (await once(mode)).text;
+    const first = await once('');
+    const forced = first.text ? languageToForce(first.text, first.language) : '';
+    if (!forced) return first.text;
+    try { return (await once(forced)).text; } catch { return ''; } // better no line than one in the wrong language
   }
 
   // Streams a chat completion. onDelta(textPiece). Returns the full text.
@@ -165,4 +219,4 @@ function cleanTranscript(data) {
   return text;
 }
 
-module.exports = { LLM, cleanTranscript };
+module.exports = { LLM, cleanTranscript, speechLanguage, languageToForce };

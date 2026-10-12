@@ -164,7 +164,8 @@
           <p class="hint" id="modelHint"></p>
           <label>Model that turns speech into text <input id="s-stt-model" type="text"></label>
           <label id="s-llm-base-row">API address <input id="s-llm-base" type="text" placeholder="https://api.openai.com/v1"></label>
-          <label>Spoken language <input id="s-stt-lang" type="text" placeholder="Detect automatically (or en, zh, ms ...)"></label>
+          <label>Spoken language <select id="s-stt-lang"><option value="en+zh">English and Mandarin</option><option value="en">English only</option><option value="zh">Mandarin only</option></select></label>
+          <p class="hint">Speech is only ever written down as English or Mandarin, so it is not mistaken for another language. Choose one language if the whole meeting is in it: that is the most accurate.</p>
           <label>Names and terms to get right <textarea id="s-stt-vocab" rows="2" placeholder="Product names, acronyms, people: CPM, Databricks, Wen Jun"></textarea></label>
         </fieldset>
         <fieldset>
