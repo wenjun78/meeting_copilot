@@ -33,12 +33,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
   height: 40px; flex: none; padding: 0 6px 0 12px; -webkit-app-region: drag;
   background: var(--shell-2); border-bottom: 1px solid var(--rule);
 }
-.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .name { font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .clock { color: var(--muted); font-variant-numeric: tabular-nums; }
 .live { width: 8px; height: 8px; border-radius: 50%; background: var(--shell-3); flex: none; }
 .listening .live { background: var(--alert); box-shadow: 0 0 0 3px rgba(239, 107, 94, 0.22); }
-.bar-actions { display: flex; align-items: center; gap: 2px; -webkit-app-region: no-drag; }
+.bar-actions { display: flex; align-items: center; gap: 2px; -webkit-app-region: no-drag; flex: none; }
+/* Window opacity, beside the Start button: a short slider, see-through to the left. */
+.opacity { -webkit-appearance: none; appearance: none; width: 64px; flex: none; height: 18px; margin: 0 8px 0 0; padding: 0; background: transparent; border: 0; cursor: pointer; }
+.opacity::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, transparent, var(--muted)); border: 1px solid var(--rule); }
+.opacity::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -5px; border-radius: 50%; background: var(--text); border: 0; }
+.opacity:hover::-webkit-slider-thumb { background: var(--them); }
+@media (max-width: 489px) { .opacity { width: 40px; margin-right: 4px; } .bar { gap: 6px; } }
 .icon {
   width: 30px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 5px;
   background: transparent; cursor: pointer; color: var(--muted);

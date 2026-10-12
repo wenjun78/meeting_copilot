@@ -216,6 +216,15 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     win.webContents.reload();
     await loaded;
     await waitFor('reload', () => js(`!!document.querySelector('#card.idle') && document.getElementById('s-them').options.length > 1`));
+    // Window opacity sits in the title bar, left of the Start button, and applies as it moves.
+    const bar = await js(`(() => { const o = document.getElementById('opacity').getBoundingClientRect(), t = document.getElementById('toggle').getBoundingClientRect(), n = document.querySelector('.name').getBoundingClientRect(); return { left: o.left, right: o.right, width: o.width, top: o.top, bottom: o.bottom, startLeft: t.left, nameRight: n.right, inSettings: !!document.getElementById('s-opacity') }; })()`);
+    await js(`(() => { const o = document.getElementById('opacity'); o.value = '0.7'; o.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await waitFor('opacity saved', async () => config.get().ui.opacity === 0.7);
+    await shot('3a-title-bar');
+    await js(`(() => { const o = document.getElementById('opacity'); o.value = '1'; o.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await waitFor('opacity back', async () => config.get().ui.opacity === 1);
+    step('opacity in the title bar', bar);
+    if (bar.inSettings || bar.width < 40 || bar.right > bar.startLeft || bar.left < bar.nameRight || bar.bottom > 40) throw new Error('the opacity slider is not between the name and the Start button');
     await js(`document.querySelector('[data-tab=settings]').click()`);
     await new Promise(r => setTimeout(r, 300));
     await shot('3-settings');
