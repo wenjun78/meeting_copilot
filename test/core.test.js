@@ -1079,11 +1079,20 @@ test('an answer is not started over for a few trailing words, and waits longer w
   await say('Take your time.');
   await wait(120);
   assert.equal(lines.length, 1);
+  await say('Okay, no rush, whenever you are ready.');
+  await wait(120);
+  assert.equal(lines.length, 1);
+  // Two words that change the question: answered again.
+  await say('In SQL.');
+  await wait(80);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[1], 'How do you handle duplicate customer records? In SQL.');
+  lines.pop();
   // More of the question: answered again, as one question.
   await say('And how would that change with ten times the data?');
   await wait(80);
   assert.equal(lines.length, 2);
-  assert.equal(lines[1], 'How do you handle duplicate customer records? And how would that change with ten times the data?');
+  assert.match(lines[1], /^How do you handle duplicate customer records\? In SQL\. And how would that change with ten times the data\?$/);
 
   // A sentence that trails off is given longer; when the rest arrives it is answered once, whole.
   co.reset(); lines.length = 0;
@@ -1093,4 +1102,9 @@ test('an answer is not started over for a few trailing words, and waits longer w
   await say('reloads only the changed partitions?');
   await wait(80);
   assert.deepEqual(lines, ['How would you design a pipeline that reloads only the changed partitions?']);
+  // Chinese without a closing mark is a finished question, not one that trails off.
+  co.reset(); lines.length = 0;
+  await say('你怎么处理重复的客户记录');
+  await wait(70);
+  assert.deepEqual(lines, ['你怎么处理重复的客户记录']);
 });

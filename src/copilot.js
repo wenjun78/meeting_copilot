@@ -5,6 +5,8 @@ const { tokenize } = require('./rag/tokenize');
 const { rankPrepared } = require('./qa');
 const { planPinned } = require('./slots');
 
+// Things said to be polite or to fill a pause, which add nothing to a question.
+const COURTESY = /^(?:(?:ok(?:ay)?|right|yeah|yes|yep|sure|so|well|alright|all right|great|cool|good|perfect|thanks|thank you|please|go ahead|take your time|no rush|no pressure|no worries|whenever you(?:'re| are) ready|if you can|if (?:that|it) makes sense|if possible|that(?:'s| is) (?:it|all)|mm+-?hm+|uh-?huh|hm+|um+|uh+|好的?|嗯+|对|是的|可以|行|慢慢来|不急|不着急|谢谢|没问题)[\s,.!，。！、]*)+$/i;
 // Words a finished sentence does not end on.
 const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|that|which|is|are|was|were|if|as|so|because|when|where|how|what|your|you|would|could|should)$/i;
 
@@ -144,9 +146,10 @@ class Copilot extends EventEmitter {
     const context = prev && run[0].t - prev.end < 6000 ? prev.text + ' ' : '';
     const said = run.map(e => e.text).join(' ');
     if (!detectQuestion(context + said).ask) return;
-    // A few words tacked on after the question was already taken up ("Take your time.",
-    // "Right.") are not a reason to start the answer over.
-    if (context && !detectQuestion(said).ask && tokenize(said).length < 3) {
+    // Words of courtesy tacked on after the question was already taken up ("Take your time.",
+    // "Right, okay.") are not a reason to start the answer over. Anything else is, however
+    // short: "In SQL." changes what the answer should be.
+    if (context && COURTESY.test(said.trim())) {
       const last = run[run.length - 1];
       this.lastAnsweredId = last.id;
       this.lastRun = { ...prev, end: last.t + last.dur };
@@ -155,7 +158,10 @@ class Copilot extends EventEmitter {
     clearTimeout(this.timer);
     // A sentence that trails off ("How would you handle a pipeline that ...") is probably
     // not finished: wait longer before answering, so the answer is not started twice.
-    const trailsOff = /(\.\.\.|…|,)\s*$/.test(said) || !/[.?!。？！]["”')]?\s*$/.test(said) || TRAILING_WORD.test(said.replace(/[.\s]+$/, ''));
+    // (Chinese is often written down without a closing mark, so there only an explicit
+    // trailing-off counts.)
+    const cjk = /[\u4E00-\u9FFF]/.test(said);
+    const trailsOff = /(\.\.\.|…|,|，)\s*$/.test(said) || (!cjk && (!/[.?!]["”')]?\s*$/.test(said) || TRAILING_WORD.test(said.replace(/[.\s]+$/, ''))));
     this.timer = setTimeout(() => {
       if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
       if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
