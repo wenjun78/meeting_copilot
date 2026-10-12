@@ -163,6 +163,16 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('prepared answers', { rows: qaNow, state: await js(`document.getElementById('qaState').textContent`), inKb: kb.prepared().map(p => p.q), selected: await selected() });
     if (qaNow.map(r => r.q).join('|') !== 'How do you deal with duplicate customer records?|What is your biggest weakness?' || kb.prepared().length !== 2) throw new Error('the prepared answers were not kept as edited');
 
+    // Questions to ask: its own section, saved like the other text sections and sent with every answer.
+    await openSection('ask');
+    await js(`(() => { const t = document.getElementById('slotText'); t.value = 'What does success look like in the first six months?'; t.dispatchEvent(new Event('input', { bubbles: true })); document.getElementById('slotSave').click(); })()`);
+    await waitFor('questions saved', () => js(`/^Saved/.test(document.getElementById('slotState').textContent)`));
+    await shot('2e-questions-to-ask');
+    const askPinned = kb.pinned().filter(p => p.slot === 'ask').map(p => p.title);
+    const tabNames = await js(`[...document.querySelectorAll('#slotTabs button')].map(b => b.textContent)`);
+    step('questions to ask', { askPinned, tabNames, what: await js(`document.getElementById('slotWhat').textContent`) });
+    if (askPinned.join() !== 'Questions I want to ask the other side' || !tabNames.includes('Prepared answers') || !tabNames.includes('Questions to ask') || tabNames.includes('Q&A')) throw new Error('the Questions to ask section or the renamed tab is missing');
+
     // Publications: the paper goes in its own section, is searched by section, and its
     // abstract is among what goes with every answer. "Sync all" is gone from Portfolio.
     await openSection('publications');
@@ -312,6 +322,12 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=transcript]').click()`);
     win.setBounds({ x: 0, y: 0, width: 1500, height: 860 });
     await new Promise(r => setTimeout(r, 500));
+    // Two ways to save: what was said, or that with the answers.
+    const saves = await js(`[document.getElementById('exportBtn').textContent, document.getElementById('exportAllBtn').textContent]`);
+    const plain = copilot.transcriptText({ answers: false });
+    step('save choices', { saves, transcriptOnlyHasAnswers: /Suggested answer/.test(plain), lines: plain.split('\n').length });
+    if (saves.join('|') !== 'Save transcript|Save with answers' || /Suggested answer/.test(plain) || !/Them: /.test(plain)) throw new Error('the transcript cannot be saved on its own');
+
     // Conversation log: earlier answers sit under the current one in the wide layout, every
     // answer is in the transcript where it was given, and the saved log carries them too.
     await js(`document.querySelector('#logList details').open = true`);

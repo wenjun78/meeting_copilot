@@ -270,6 +270,8 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer:\n {4}\S/);
   assert.match(saved, /Suggested answer \(you asked: What threshold do we use\?\):\n {4}[\s\S]*?0\.92/);
   assert.match(saved, /Suggested answer \(from the screen\):/);
+  // Without the answers it is the transcript alone.
+  assert.ok(!/Suggested answer/.test(co.transcriptText({ answers: false })) && /Them: How do you handle/.test(co.transcriptText({ answers: false })));
   co.reset();
   assert.equal(co.transcriptText(), '');
 });
@@ -680,7 +682,7 @@ test('loose notes from earlier versions are moved into their sections', () => {
   assert.deepEqual(ls('portfolio'), ['project notes.md']);
   assert.equal(fs.readFileSync(path.join(dir, 'about-me', NOTE), 'utf8'), 'Engineer.');
   assert.deepEqual(moveLooseFilesIntoSections(dir), [], 'nothing left to move');
-  assert.equal(SLOTS.filter(s => !s.searched && !s.papers && !s.qa).length, 4);
+  assert.equal(SLOTS.filter(s => !s.searched && !s.papers && !s.qa).length, 5);
 });
 
 test('the inventory lists every searchable file with its passages, and returns a file as it was read', async () => {
@@ -778,7 +780,7 @@ test('a paper saved under a meaningless file name is read, named by its title an
 
 test('Publications: a paper is searched by section, its abstract goes with every answer, and papers in Portfolio move over once', async () => {
   const { movePapersToPublications, planPinned, SLOTS } = require('../src/slots');
-  assert.deepEqual(SLOTS.map(s => s.id), ['about', 'cv', 'jd', 'instructions', 'qa', 'publications', 'portfolio']);
+  assert.deepEqual(SLOTS.map(s => s.id), ['about', 'cv', 'jd', 'instructions', 'qa', 'ask', 'publications', 'portfolio']);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pubs-'));
   const file = '3c1d9a7e-55aa-4f0b-9d2e-0a1b2c3d4e5f.pdf';
   fs.mkdirSync(path.join(dir, 'portfolio'));
@@ -853,7 +855,7 @@ test('Q&A: prepared answers are read from pasted text, kept one per question, an
   fs.mkdirSync(path.join(dir, 'cv'));
   fs.writeFileSync(path.join(dir, 'cv', '_note.md'), 'Engineer, AI Systems. Built ETL pipelines and a chatbot.');
   const mine = await ingestFolder(dir, { sections: true });
-  assert.equal(mine.chunks.filter(c => c.path === 'Q&A/prepared answers').length, 3);
+  assert.equal(mine.chunks.filter(c => c.path === 'Prepared answers/your list').length, 3);
   assert.ok(!mine.pinned.some(p => p.slot === 'qa'), 'prepared answers are not pinned notes');
   const kb = new KnowledgeBase(null);
   kb.setSource(mine);
@@ -1034,4 +1036,61 @@ test('search by meaning: on by itself with OpenAI, and prepared answers are foun
   assert.equal(srv.log.embed.length, before + 1);
   assert.match(srv.log.chat.at(-1).messages[1].content, /Answers I prepared[^\n]*\nQ: How do you remove entries that appear twice\?/);
   assert.deepEqual(sources.filter(x => x.n === 'Q').map(x => x.title), ['Prepared: How do you remove entries that appear twice?']);
+});
+
+test('Questions to ask: sent with every answer, with the rule for when they are offered', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ask-'));
+  fs.mkdirSync(path.join(dir, 'questions-to-ask'));
+  fs.writeFileSync(path.join(dir, 'questions-to-ask', '_note.md'), 'What does success look like in the first six months?\nHow is the team split between building and support?\n');
+  fs.mkdirSync(path.join(dir, 'instructions'));
+  fs.writeFileSync(path.join(dir, 'instructions', '_note.md'), 'Keep it short.');
+  const mine = await ingestFolder(dir, { sections: true });
+  const pin = mine.pinned.find(p => p.slot === 'ask');
+  assert.equal(pin.title, 'Questions I want to ask the other side');
+  assert.match(pin.text, /first six months\?\nHow is the team split/);
+  const kb = new KnowledgeBase(null);
+  kb.setSource(mine);
+  const getConfig = cfgFor();
+  const co = new Copilot({ getConfig, llm: new LLM(getConfig), kb, debounceMs: 20 });
+  const [system, user] = co._buildMessages({ asked: 'Do you have any questions for us?', mode: 'auto', refs: [], cfg: getConfig() });
+  assert.match(user.content, /### Instructions for this meeting\nKeep it short\.\n\n### Questions I want to ask the other side\nWhat does success look like/);
+  assert.match(system.content, /When the other side invites questions[^\n]*two or three of those questions as bullets[^\n]*leave out any the conversation has already answered[^\n]*Never answer these questions yourself/);
+  const { detectQuestion } = require('../src/question');
+  assert.ok(detectQuestion('Okay, that is all from my side. Do you have any questions for us?').ask);
+});
+
+test('an answer is not started over for a few trailing words, and waits longer when the question trails off', async () => {
+  const lines = [];
+  const waiting = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (messages, { onDelta }) => { lines.push(/They just said: "([^"]*)"/.exec(messages[1].content)[1]); onDelta('ok'); return 'ok'; },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null), debounceMs: 40 });
+  const say = async (text) => { const p = co.onSegment('them', Buffer.from('x'), 800); waiting.shift()(text); await p; };
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+  await say('How do you handle duplicate customer records?');
+  await wait(80);
+  assert.deepEqual(lines, ['How do you handle duplicate customer records?']);
+  // A short remark right after: the answer stands.
+  await say('Take your time.');
+  await wait(120);
+  assert.equal(lines.length, 1);
+  // More of the question: answered again, as one question.
+  await say('And how would that change with ten times the data?');
+  await wait(80);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[1], 'How do you handle duplicate customer records? And how would that change with ten times the data?');
+
+  // A sentence that trails off is given longer; when the rest arrives it is answered once, whole.
+  co.reset(); lines.length = 0;
+  await say('How would you design a pipeline that');
+  await wait(60);
+  assert.equal(lines.length, 0, 'still waiting: the sentence is not finished');
+  await say('reloads only the changed partitions?');
+  await wait(80);
+  assert.deepEqual(lines, ['How would you design a pipeline that reloads only the changed partitions?']);
 });

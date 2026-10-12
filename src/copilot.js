@@ -5,6 +5,9 @@ const { tokenize } = require('./rag/tokenize');
 const { rankPrepared } = require('./qa');
 const { planPinned } = require('./slots');
 
+// Words a finished sentence does not end on.
+const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|that|which|is|are|was|were|if|as|so|because|when|where|how|what|your|you|would|could|should)$/i;
+
 // Holds the meeting state (transcript, shared-screen text) and produces
 // answer suggestions. No Electron dependencies, so it can be tested in Node.
 //
@@ -139,12 +142,24 @@ class Copilot extends EventEmitter {
     if (!run.length) return;
     const prev = this.lastRun;
     const context = prev && run[0].t - prev.end < 6000 ? prev.text + ' ' : '';
-    if (!detectQuestion(context + run.map(e => e.text).join(' ')).ask) return;
+    const said = run.map(e => e.text).join(' ');
+    if (!detectQuestion(context + said).ask) return;
+    // A few words tacked on after the question was already taken up ("Take your time.",
+    // "Right.") are not a reason to start the answer over.
+    if (context && !detectQuestion(said).ask && tokenize(said).length < 3) {
+      const last = run[run.length - 1];
+      this.lastAnsweredId = last.id;
+      this.lastRun = { ...prev, end: last.t + last.dur };
+      return;
+    }
     clearTimeout(this.timer);
+    // A sentence that trails off ("How would you handle a pipeline that ...") is probably
+    // not finished: wait longer before answering, so the answer is not started twice.
+    const trailsOff = /(\.\.\.|…|,)\s*$/.test(said) || !/[.?!。？！]["”')]?\s*$/.test(said) || TRAILING_WORD.test(said.replace(/[.\s]+$/, ''));
     this.timer = setTimeout(() => {
       if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
       if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
-    }, this.debounceMs);
+    }, this.debounceMs * (trailsOff ? 2.2 : 1));
   }
 
   _notice(level, message) {
@@ -284,6 +299,7 @@ class Copilot extends EventEmitter {
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
       '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
       '- "Answers I prepared" are replies the user wrote in advance for questions they expect; what they state is the user\'s own fact. When what is asked is the same question as one of them, or close to it in meaning even if worded differently, build the reply on that prepared answer: keep its facts, examples, numbers and stance, fit it to the format and to exactly what was asked, and do not swap in other material or add a "Check:" line for what it states. When two apply, combine them. When none is close to the question, leave them out.',
+      '- "Questions I want to ask the other side" in the pinned notes are the user\'s own questions for the people they are meeting. When the other side invites questions ("do you have any questions for us?", "anything you would like to ask?") or the user asks what to ask, reply with one short opening line and then two or three of those questions as bullets, worded to be said aloud: choose the ones that fit what was discussed, leave out any the conversation has already answered, and tie one to something the other side said when that is natural. Never answer these questions yourself, and do not bring them up at any other time.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
       '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',
@@ -347,13 +363,14 @@ class Copilot extends EventEmitter {
     return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
   }
 
-  // The conversation as text, in order: what each side said and every answer suggested.
-  transcriptText() {
+  // The conversation as text, in order: what each side said and, unless answers is false,
+  // every answer suggested.
+  transcriptText({ answers: withAnswers = true } = {}) {
     const at = (t) => `[${new Date(t).toLocaleTimeString()}]`;
     const said = this.entries.filter(e => !e.pending).map(e => ({ t: e.t, text: `${at(e.t)} ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}` }));
     const answers = this.history.map(h => ({ t: h.t || 0,
       text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
-    return [...said, ...answers].sort((a, b) => a.t - b.t).map(x => x.text).join('\n');
+    return [...said, ...(withAnswers ? answers : [])].sort((a, b) => a.t - b.t).map(x => x.text).join('\n');
   }
 }
 

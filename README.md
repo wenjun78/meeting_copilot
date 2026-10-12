@@ -53,7 +53,7 @@ npm start
 
 | | |
 |---|---|
-| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses, with each answer where it was given. "Save conversation log" writes it all to a text file |
+| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
 | Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
 | Answers | Written automatically when they ask a question; one or two sentences to say, then supporting points, with numbered sources you can click |
@@ -154,7 +154,8 @@ Everything lives in the **Knowledge** tab, organised by what it is:
 | CV | Your CV: paste it or add the PDF/Word file | Sent with every answer |
 | JD | The job description, agenda or brief for this meeting | Sent with every answer |
 | Instructions | Tone, length, what to stress or avoid | Sent with every answer |
-| Q&A | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or dropped as a file (Word, PDF, Markdown or text with numbered questions, questions as headings or in bold, or `Q:` / `A:`; or a CSV with question and answer columns) | Offered with every question, closest first (about 16,000 characters fit, roughly 30 answers); when the question asked is the same or similar, the reply is built on your answer |
+| Prepared answers | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or dropped as a file (Word, PDF, Markdown or text with numbered questions, questions as headings or in bold, or `Q:` / `A:`; or a CSV with question and answer columns) | Offered with every question, closest first (about 16,000 characters fit, roughly 30 answers); when the question asked is the same or similar, the reply is built on your answer |
+| Questions to ask | The questions you want to ask them, one per line | Sent with every answer; when they invite your questions, two or three that fit the conversation are suggested, leaving out any already answered |
 | Publications | Your papers: add the PDF or Word file; type how you sum each one up | Searched section by section (methods, results, limitations); each paper's title and abstract, and what you typed, sent with every answer |
 | Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
 | Equipped | Nothing to fill in: it shows what the above adds up to | |
@@ -165,7 +166,7 @@ copied into the app's own folder, so they keep working if the originals move.
 
 **Sent with every answer** has a budget: the first 8,000 characters of each
 note or file, 20,000 in total, in the order About me, CV, JD, Instructions,
-Publications.
+Questions to ask, Publications.
 Anything longer is still searched. **Equipped** shows exactly how much of
 each note goes out, lists every searchable file with its passages, opens any
 of them to show the text as the app read it, and lets you try a question.
