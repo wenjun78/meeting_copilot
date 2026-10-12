@@ -673,7 +673,7 @@ function fillSettings() {
   $('s-gh-token').placeholder = keyHint(s.githubToken); $('s-gh-api').value = c.github.apiBase;
   $('s-api-url').value = c.api.searchUrl; $('s-api-hname').value = c.api.headerName; $('s-api-hvalue').placeholder = keyHint(s.apiHeader);
   $('s-embed-model').value = c.embed.model; $('s-embed-base').value = c.embed.baseUrl; $('s-embed-key').placeholder = keyHint(s.embedKey);
-  $('s-opacity').value = String(c.ui.opacity || 1);
+  $('opacity').value = String(c.ui.opacity || 1);
   $('kbAuto').checked = c.autoSync !== false;
   $('s-context').value = c.answerContext === 'lean' ? 'lean' : 'full';
   $('onTop').setAttribute('aria-pressed', String(c.ui.onTop !== false));
@@ -775,7 +775,6 @@ $('settings').addEventListener('submit', async (e) => {
     github: { apiBase: v('s-gh-api') || 'https://api.github.com' },
     api: { searchUrl: v('s-api-url'), headerName: v('s-api-hname') },
     capture: { micDeviceId: $('s-mic').value, themSource: $('s-them').value, ocrIntervalSec: Number($('s-ocr-int').value), ocrLangs: v('s-ocr-langs') || 'eng' },
-    ui: { opacity: Number($('s-opacity').value) },
     shortcuts: Object.fromEntries(SHORTCUT_FIELDS.map(([action, id]) => [action, $(id).dataset.accel || ''])),
   };
   const used = Object.values(patch.shortcuts).filter(Boolean);
@@ -794,7 +793,8 @@ $('settings').addEventListener('submit', async (e) => {
     if (state.answer.status === 'idle') renderIdle();
   } catch (err) { fail(err); }
 });
-$('s-opacity').addEventListener('input', () => call('config:set', { ui: { opacity: Number($('s-opacity').value) } }));
+// Window opacity, in the title bar: applied as the slider moves.
+$('opacity').addEventListener('input', () => call('config:set', { ui: { opacity: Number($('opacity').value) } }).catch(() => {}));
 
 // ---- boot -------------------------------------------------------------------
 (async () => {

@@ -286,17 +286,20 @@ async function autoSync({ force = false } = {}) {
 // Only what is new is sent. After a failure it is not tried again until the settings change
 // or the app restarts, and the reason is shown once. -> how many passages were embedded
 let embedFailedFor = '';
+let embedding = null; // one run at a time; a second caller waits for the first and then looks again
 async function embedIfConfigured() {
+  if (embedding) { try { await embedding; } catch { /* reported by that run */ } }
   const model = llm.embedModel();
   if (!model || embedFailedFor === model) return 0;
+  embedding = kb.embedMissing(t => llm.embed(t), model,
+    (done, total) => send('kb', { type: 'progress', message: `Preparing search by meaning: ${done} of ${total} passages` }));
   try {
-    return await kb.embedMissing(t => llm.embed(t), model,
-      (done, total) => send('kb', { type: 'progress', message: `Preparing search by meaning: ${done} of ${total} passages` }));
+    return await embedding;
   } catch (e) {
     embedFailedFor = model;
     send('notice', { level: 'error', message: `Search by meaning is off for now: ${e.message} Search by keywords still works.` });
     return 0;
-  }
+  } finally { embedding = null; }
 }
 
 // ---- app updates ---------------------------------------------------------------
@@ -392,7 +395,7 @@ function wireIpc() {
     }
     // A key or model that makes search by meaning possible: prepare what is already there.
     if (llm.embedModel() !== before || patch.llm || patch.embed) embedFailedFor = '';
-    if (llm.embedModel() && (llm.embedModel() !== before || kb.chunks.some(c => !c.vec)) && kb.chunks.length) {
+    if ((patch.llm || patch.embed) && llm.embedModel() && (llm.embedModel() !== before || kb.chunks.some(c => !c.vec)) && kb.chunks.length) {
       embedIfConfigured().then((n) => { if (n) { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); } });
     }
     return publicConfig();
