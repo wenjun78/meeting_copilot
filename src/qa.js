@@ -215,10 +215,13 @@ function parseQATable(text) {
 // spoken question rarely repeats the prepared one, so this only decides the order (and which
 // to name as used); the model is shown the answers and judges which one fits.
 // -> [{q, a, score, match}] ; match: the questions share their main words.
+const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+const normalized = (v) => { const n = Math.sqrt(dot(v, v)) || 1; return Array.from(v, x => x / n); };
 const norm = (t) => (t.length > 5 && t.endsWith('ly') ? t.slice(0, -2) : t.length > 4 ? t.replace(/e$/, '') : t); // slowly / slow, leave / leaving
 const words = (text, opts) => new Set(tokenize(text, opts).map(norm));
-function rankPrepared(pairs, asked) {
+function rankPrepared(pairs, asked, askedVec = null) {
   const said = words(asked, { question: true });
+  const unit = askedVec && askedVec.length ? normalized(askedVec) : null;
   const docs = pairs.map(p => ({ qt: words(p.q), at: words(p.a) }));
   // A word that appears in many of the prepared questions ("spark", "data") says less about
   // which one is meant than a word that appears in one.
@@ -233,8 +236,13 @@ function rankPrepared(pairs, asked) {
     for (const t of qt) total += weight(t);
     for (const t of said) { if (qt.has(t)) { inQ++; hit += weight(t); } if (at.has(t)) inA++; }
     const share = hit ? Math.max(hit / total, hit / saidWeight) : 0;
-    const score = share + 0.15 * (inA / Math.max(1, said.size));
-    return { ...p, i, score, match: inQ >= (qt.size >= 4 ? 2 : 1) && share >= 0.5 };
+    const worded = share + 0.15 * (inA / Math.max(1, said.size));
+    // By meaning, when both sides have been embedded: a question asked in other words
+    // ("where do you look when a job crawls?") still lands on the prepared one.
+    const { vec, ...pair } = p;
+    const alike = unit && vec && vec.length === unit.length ? Math.max(0, dot(unit, vec)) : null;
+    const score = alike === null ? worded : 0.7 * alike + 0.3 * Math.min(1, worded);
+    return { ...pair, i, score, match: (inQ >= (qt.size >= 4 ? 2 : 1) && share >= 0.5) || (alike !== null && alike >= 0.55) };
   }).sort((x, y) => (y.match ? 1 : 0) - (x.match ? 1 : 0) || y.score - x.score || x.i - y.i).map(({ i, ...p }) => p);
 }
 

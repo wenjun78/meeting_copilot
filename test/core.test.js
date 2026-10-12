@@ -989,3 +989,49 @@ test('Q&A files: a numbered list of 14 questions is read whole from PDF and Word
   assert.equal(rankPrepared(many, 'Okay, so say your Kafka consumer is slow, where do you look?')[0].q, 'a Kafka consumer is running slowly. What would you inspect first?');
   assert.equal(rankPrepared(many, 'If a Spark job died midway and left partial data, how do you recover?')[0].q, 'a Spark job fails halfway through after partial data has been written. How would you recover safely?');
 });
+
+test('search by meaning: on by itself with OpenAI, and prepared answers are found for a question asked in other words', async () => {
+  // Which embedding model is used.
+  const model = (llmCfg, embed = {}) => new LLM(() => ({ llm: llmCfg, embed: { baseUrl: '', apiKey: '', model: '', ...embed } })).embedModel();
+  assert.equal(model({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-x' }), 'text-embedding-3-small');
+  assert.equal(model({ baseUrl: 'https://api.openai.com/v1', apiKey: '' }), '', 'no key yet: nothing to call');
+  assert.equal(model({ baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'gsk' }), '', 'a service without embeddings keeps to keywords');
+  assert.equal(model({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-x' }, { model: 'off' }), '');
+  assert.equal(model({ baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'gsk' }, { model: 'nomic-embed', baseUrl: 'http://localhost:11434/v1' }), 'nomic-embed');
+  assert.equal(model({ baseUrl: 'https://api.openai.com.evil.example/v1', apiKey: 'sk-x' }), '');
+
+  // Prepared answers whose wording shares nothing with what is asked.
+  const { QA_FILE, rankPrepared } = require('../src/qa');
+  const pairs = [
+    { q: 'What are your salary expectations?', a: 'Market range for a senior AI engineer.' },
+    { q: 'How do you remove entries that appear twice?', a: 'Exact match on tax ID, then fuzzy match at 0.92.' },
+    { q: 'How do you run jobs every night?', a: 'Airflow with a nightly schedule and retries.' },
+  ];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-sem-'));
+  fs.mkdirSync(path.join(dir, 'qa'));
+  fs.writeFileSync(path.join(dir, 'qa', QA_FILE), JSON.stringify(pairs));
+  const kb = new KnowledgeBase(null);
+  kb.setSource(await ingestFolder(dir, { sections: true }));
+  const getConfig = cfgFor({ embed: { baseUrl: '', apiKey: '', model: 'embed-model' } });
+  const llm = new LLM(getConfig);
+  assert.equal(await kb.embedMissing(t => llm.embed(t), llm.embedModel()), 3);
+  assert.ok(kb.prepared().every(p => p.vec && p.vec.length === 3));
+
+  const asked = 'What if the same company shows up in the data more than once?';
+  assert.ok(!rankPrepared(kb.prepared(), asked)[0].match, 'by wording alone nothing matches');
+  const [vec] = await llm.embed([asked]);
+  const ranked = rankPrepared(kb.prepared(), asked, vec);
+  assert.equal(ranked[0].q, 'How do you remove entries that appear twice?');
+  assert.ok(ranked[0].match && !ranked[1].match);
+  assert.ok(!('vec' in ranked[0]), 'the numbers stay out of what is passed on');
+
+  // In a meeting: the question is embedded once, and the prepared answer leads the block and the sources.
+  const co = new Copilot({ getConfig, llm, kb, debounceMs: 20 });
+  let sources = null;
+  co.on('answer', e => { if (e.type === 'sources') sources = e.sources; });
+  const before = srv.log.embed.length;
+  await co.answer({ mode: 'typed', question: asked });
+  assert.equal(srv.log.embed.length, before + 1);
+  assert.match(srv.log.chat.at(-1).messages[1].content, /Answers I prepared[^\n]*\nQ: How do you remove entries that appear twice\?/);
+  assert.deepEqual(sources.filter(x => x.n === 'Q').map(x => x.title), ['Prepared: How do you remove entries that appear twice?']);
+});

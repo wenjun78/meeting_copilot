@@ -183,13 +183,24 @@ class LLM {
     } finally { clearTimeout(timer); }
   }
 
-  embedConfigured() {
-    const e = this.getConfig().embed || {};
-    return Boolean(e.model);
+  // Search by meaning needs an embedding model: the one named in Settings, or, when nothing
+  // is named and the service is OpenAI, its small embedding model with the same key.
+  // "off" in Settings keeps search to keywords.
+  embedModel() {
+    const cfg = this.getConfig(), e = cfg.embed || {};
+    const named = String(e.model || '').trim();
+    if (/^(off|none|no|keyword)$/i.test(named)) return '';
+    if (named) return named;
+    const base = e.baseUrl || (cfg.llm && cfg.llm.baseUrl) || '';
+    const key = e.baseUrl ? e.apiKey : (e.apiKey || (cfg.llm && cfg.llm.apiKey));
+    return /^https:\/\/api\.openai\.com(\/|$)/.test(base) && key ? 'text-embedding-3-small' : '';
   }
 
+  embedConfigured() { return Boolean(this.embedModel()); }
+
   async embed(texts, { signal } = {}) {
-    const { base, key, model } = this._endpoint('embed');
+    const { base, key } = this._endpoint('embed');
+    const model = this.embedModel();
     const res = await this.fetch(`${base}/embeddings`, {
       method: 'POST', signal, body: JSON.stringify({ model, input: texts }),
       headers: this._headers(key, { 'Content-Type': 'application/json' }),

@@ -191,8 +191,12 @@ experience. Markdown gives the cleanest results (`##` headings become
 passages); PDF and Word are read too, though multi-column layouts can come
 out jumbled, and scanned PDFs have no text to read.
 
-Retrieval is keyword-based and works offline once synced. Set an embedding
-model under Settings > More to add meaning-based matching.
+Search is by keywords and, with OpenAI, also by meaning: passages and prepared
+answers are embedded once with `text-embedding-3-small` (same key, a few
+cents for thousands of passages) and each question is embedded when asked, so
+a question worded differently still finds its passage or prepared answer.
+Other services keep to keywords unless an embedding model is named under
+Settings > More; type `off` there to use keywords only.
 
 ### Staying up to date
 

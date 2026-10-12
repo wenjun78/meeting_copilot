@@ -282,13 +282,20 @@ async function autoSync({ force = false } = {}) {
   return { updated, failures };
 }
 
+// Gives every passage (and prepared answer) the numbers that let it be found by meaning.
+// Only what is new is sent. After a failure it is not tried again until the settings change
+// or the app restarts, and the reason is shown once. -> how many passages were embedded
+let embedFailedFor = '';
 async function embedIfConfigured() {
-  if (!llm.embedConfigured()) return;
+  const model = llm.embedModel();
+  if (!model || embedFailedFor === model) return 0;
   try {
-    await kb.embedMissing(t => llm.embed(t), config.get().embed.model,
-      (done, total) => send('kb', { type: 'progress', message: `Embedding passages ${done} of ${total}` }));
+    return await kb.embedMissing(t => llm.embed(t), model,
+      (done, total) => send('kb', { type: 'progress', message: `Preparing search by meaning: ${done} of ${total} passages` }));
   } catch (e) {
-    send('notice', { level: 'error', message: `${e.message} Keyword search still works.` });
+    embedFailedFor = model;
+    send('notice', { level: 'error', message: `Search by meaning is off for now: ${e.message} Search by keywords still works.` });
+    return 0;
   }
 }
 
@@ -376,15 +383,17 @@ function wireIpc() {
 
   handle('config:get', () => publicConfig());
   handle('config:set', (patch) => {
-    const before = config.get().embed.model;
+    const before = llm.embedModel();
     config.update(patch);
     if (patch.ui && patch.ui.opacity && win) win.setOpacity(Math.max(0.35, Math.min(1, patch.ui.opacity)));
     if (patch.shortcuts) {
       const failed = registerShortcuts();
       if (failed.length) send('notice', { level: 'error', message: shortcutFailure(failed) });
     }
-    if (config.get().embed.model && config.get().embed.model !== before && kb.chunks.length) {
-      embedIfConfigured().then(() => { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); });
+    // A key or model that makes search by meaning possible: prepare what is already there.
+    if (llm.embedModel() !== before || patch.llm || patch.embed) embedFailedFor = '';
+    if (llm.embedModel() && (llm.embedModel() !== before || kb.chunks.some(c => !c.vec)) && kb.chunks.length) {
+      embedIfConfigured().then((n) => { if (n) { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); } });
     }
     return publicConfig();
   });
@@ -651,7 +660,9 @@ app.whenReady().then(() => {
   movePapersToPublications(myFilesDir(), async (file) => /^Publication \(research paper\)/.test((await extractDoc(path.basename(file), fs.readFileSync(file))).name))
     .then((moved) => { if (moved.length) send('notice', { level: 'info', message: `Moved to Publications: ${moved.join(', ')}` }); })
     .catch(() => {})
-    .then(() => syncMine()).catch(() => {});
+    .then(() => syncMine()).catch(() => {})
+    // Passages added before search by meaning was available get their numbers now.
+    .then(() => embedIfConfigured()).then((n) => { if (n) { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); } }).catch(() => {});
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();
