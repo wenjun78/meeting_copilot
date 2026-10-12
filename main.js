@@ -113,7 +113,7 @@ function publicConfig() {
 // Files added through the app are copied here, so they keep working if the originals move.
 const myFilesDir = () => path.join(app.getPath('userData'), 'my-files');
 
-// ---- sections: About me, CV, JD, Instructions, Q&A, Publications, Portfolio -------------------------------
+// ---- sections: About me, CV, JD, Instructions, Prepared answers, Questions to ask, Publications, Portfolio -------------------------------
 
 const slotDir = (slot) => path.join(myFilesDir(), slot.dir);
 const syncMine = () => (fs.existsSync(myFilesDir()) ? syncOrigin({ kind: 'folder', spec: myFilesDir() }) : Promise.resolve([]));
@@ -133,7 +133,7 @@ function slotInfo(slot) {
   return { id: slot.id, label: slot.label, title: slot.title, searched: !!slot.searched, text, files };
 }
 
-// Prepared answers: one list, kept as a file in the Q&A section.
+// Prepared answers: one list, kept as a file in the Prepared answers section.
 const qaFile = () => path.join(slotDir(slotById('qa')), QA_FILE);
 function qaList() {
   try { return normalizePairs(JSON.parse(fs.readFileSync(qaFile(), 'utf8'))); } catch { return []; }
@@ -576,11 +576,11 @@ function wireIpc() {
     return true;
   });
   handle('meeting:reset', () => { copilot.reset(); return true; });
-  handle('meeting:export', async () => {
-    const text = copilot.transcriptText();
-    if (!text) throw new Error('Nothing has been said or answered yet.');
+  handle('meeting:export', async ({ answers = true } = {}) => {
+    const text = copilot.transcriptText({ answers });
+    if (!text) throw new Error(answers ? 'Nothing has been said or answered yet.' : 'Nothing has been said yet.');
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-    const r = await dialog.showSaveDialog(win, { defaultPath: `meeting-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
+    const r = await dialog.showSaveDialog(win, { defaultPath: `${answers ? 'meeting-with-answers' : 'transcript'}-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
     if (r.canceled || !r.filePath) return null;
     fs.writeFileSync(r.filePath, text);
     return r.filePath;

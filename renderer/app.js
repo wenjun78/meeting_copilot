@@ -95,6 +95,7 @@ function renderAnswer() {
       : `They said: ${a.question}`;
   $('asked').className = 'asked' + (a.mode === 'typed' || a.mode === 'screen' ? ' mine' : '');
   if (a.status === 'error') { card.className = 'card fail'; card.textContent = a.error; }
+  else if (!a.text && a.stale) { card.className = 'card stale'; renderAnswerText(card, a.stale, a.staleSources); card.prepend(el('p', { class: 'updating', text: 'They added to the question. Updating the answer' })); }
   else if (!a.text) { card.className = 'card wait'; card.textContent = a.sources.length ? 'Writing your answer' : 'Looking through your sources'; }
   else { card.className = 'card'; renderAnswerText(card, a.text); }
   const row = $('sources');
@@ -110,7 +111,10 @@ function openSource(src) {
 
 window.mc.on('answer', (e) => {
   const a = state.answer;
-  if (e.type === 'start') state.answer = { id: e.id, text: '', sources: [], status: 'working', question: e.question, mode: e.mode };
+  // When an answer is replaced while it was being written (they carried on talking), what
+  // was written so far stays in view, dimmed, until the new one starts to arrive.
+  if (e.type === 'start') state.answer = { id: e.id, text: '', sources: [], status: 'working', question: e.question, mode: e.mode,
+    stale: a.status === 'working' && e.mode === 'auto' ? (a.text || a.stale || '') : '', staleSources: a.status === 'working' ? (a.text ? a.sources : a.staleSources || []) : [] };
   else if (e.id < a.id) return; // a newer answer has replaced this one
   else if (e.type === 'sources') a.sources = e.sources;
   else if (e.type === 'delta') a.text += e.text;
@@ -217,7 +221,10 @@ $('resetBtn').addEventListener('click', async () => {
   state.answer = { id: state.answer.id, text: '', sources: [], status: 'idle' }; renderAnswer(); renderLog();
 });
 $('exportBtn').addEventListener('click', async () => {
-  try { const p = await call('meeting:export'); if (p) toast(`Conversation log saved to ${p}`); } catch (e) { fail(e); }
+  try { const p = await call('meeting:export', { answers: false }); if (p) toast(`Transcript saved to ${p}`); } catch (e) { fail(e); }
+});
+$('exportAllBtn').addEventListener('click', async () => {
+  try { const p = await call('meeting:export', { answers: true }); if (p) toast(`Transcript with answers saved to ${p}`); } catch (e) { fail(e); }
 });
 
 // ---- listening --------------------------------------------------------------
@@ -337,12 +344,14 @@ $('onTop').addEventListener('click', async () => {
 window.mc.on('notice', (n) => toast(n.message, n.level));
 
 // ---- knowledge --------------------------------------------------------------
-// Sections (About me, CV, JD, Instructions, Q&A, Publications, Portfolio) are the way in; typing, files and
+// Sections (About me, CV, JD, Instructions, Prepared answers, Questions to ask, Publications,
+// Portfolio) are the way in; typing, files and
 // drag-and-drop are how each one is filled. "Equipped" shows everything that results.
 const SECTION_TEXT = {
   about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
   cv: { what: 'Your CV. Paste it here or add the file. Sent with every answer.', hint: 'Paste your CV, or drop the PDF or Word file below.' },
   jd: { what: 'The job description, agenda or brief for this meeting. Sent with every answer; replace it before a different meeting.', hint: 'Paste the job description, or drop the file below.' },
+  ask: { what: 'Questions you want to ask them. When they invite your questions, two or three that fit the conversation are suggested, leaving out any it has already answered. Sent with every answer.', hint: 'One question per line, the most important first.\nWhat does success look like in the first six months?\nHow is the team split between building and support?' },
   publications: { what: 'Your papers. Add each PDF or Word file: it is searched section by section (methods, results, limitations), and its title and abstract go with every answer. Text typed here goes with every answer too.', hint: 'How you would sum up each paper in 30 seconds, your part in it, and what you would do differently.' },
   instructions: { what: 'How the answers should behave: tone, length, what to stress, what to avoid. Sent with every answer.', hint: 'Keep answers under 30 seconds. Lead with ...' },
 };
@@ -457,7 +466,7 @@ window.addEventListener('drop', async (e) => {
   addFilesTo(target, paths);
 });
 
-// ---- Q&A: prepared answers ----
+// ---- Prepared answers ----
 // One list of question-and-answer pairs. The form adds a pair or, after "Edit", changes one.
 const qa = { list: [], editing: -1 };
 function renderQa(list) {

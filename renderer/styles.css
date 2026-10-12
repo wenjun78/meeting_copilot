@@ -110,6 +110,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .card.idle ol { margin: 0.3em 0 0; padding-left: 1.3em; }
 .card.idle li { font-size: inherit; margin: 0.2em 0; }
 .card.idle .done { text-decoration: line-through; opacity: 0.6; }
+.card.stale > :not(.updating) { opacity: 0.5; }
+.card .updating { font: 12.5px/1.4 var(--ui); color: var(--ink-soft); margin-bottom: 0.6em; }
+.card .updating::after { content: ""; display: inline-block; width: 1.2em; text-align: left; animation: dots 1.2s steps(4, end) infinite; }
 .card.wait { color: var(--ink-soft); font: 14px/1.5 var(--ui); }
 .card.fail { background: #fbe4e1; color: #7c1d14; font: 13.5px/1.5 var(--ui); }
 .card.wait::after { content: ""; display: inline-block; width: 1.2em; text-align: left; animation: dots 1.2s steps(4, end) infinite; }

@@ -1,6 +1,6 @@
 'use strict';
 // Prepared answers: questions the user expects, each with the answer they want to give.
-// Kept as a list in one file of the Q&A section; parsed from pasted text or documents.
+// Kept as a list in one file of the Prepared answers section; parsed from pasted text or documents.
 const { tokenize } = require('./rag/tokenize');
 
 const QA_FILE = '_qa.json';
