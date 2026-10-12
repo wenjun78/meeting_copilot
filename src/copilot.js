@@ -329,7 +329,7 @@ class Copilot extends EventEmitter {
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     // Prepared answers, closest first, as many as fit. In lean mode only the closest few.
     const ready = [];
-    let space = lean ? 1500 : 8000;
+    let space = lean ? 1500 : 16000;
     for (const p of prepared) {
       const item = `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`;
       if (item.length > space) { if (ready.length) break; continue; }

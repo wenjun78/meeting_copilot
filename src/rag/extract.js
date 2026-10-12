@@ -29,6 +29,31 @@ async function docxText(buf) {
   return value.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// A Word document as text that keeps its outline: headings, paragraphs set wholly in bold and
+// items numbered by Word on their own (a question, then its answer) become "## " lines; the
+// numbers Word shows for such items are not in the file's text, so the structure is what is left.
+async function docxOutline(buf) {
+  const { value: html } = await require('mammoth').convertToHtml({ buffer: Buffer.from(buf) });
+  const plain = (h) => h.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
+  const out = [];
+  for (const m of html.matchAll(/<(h[1-6]|p|ol|ul|table)\b[^>]*>([\s\S]*?)<\/\1>/g)) {
+    const tag = m[1], inner = m[2];
+    if (/^h/.test(tag)) out.push(`## ${plain(inner).replace(/\n/g, ' ')}`, '');
+    else if (tag === 'p') {
+      const text = plain(inner);
+      if (!text) continue;
+      const allBold = /<strong>/.test(inner) && !plain(inner.replace(/<strong>[\s\S]*?<\/strong>/g, ''));
+      out.push(allBold && text.length <= 400 ? `## ${text.replace(/\n/g, ' ')}` : text, '');
+    } else if (tag === 'table') out.push(plain(inner.replace(/<\/t[dh]>/g, ' ').replace(/<\/tr>/g, '\n')), '');
+    else {
+      const items = [...inner.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map(x => plain(x[1])).filter(Boolean);
+      if (items.length === 1 && items[0].length <= 400) out.push(`## ${items[0].replace(/\n/g, ' ')}`, '');
+      else out.push(...items.map((t, i) => (tag === 'ol' ? `${i + 1}. ${t}` : `- ${t}`)), '');
+    }
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // A name for a document that says what it is. Files are often called something meaningless
 // ("5f6f95d7-....pdf", "download (3).pdf"), so the document's own title is used when there
 // is one, and a research paper is labelled as a publication so questions about "my paper"
@@ -115,12 +140,15 @@ function abstractOf(text, max = 1500) {
 
 // -> { text, name } ; text is '' for anything that is not readable (scanned, protected, binary)
 // paper: the file is known to be a paper (it sits in Publications), whatever it looks like.
-async function extractDoc(path, buf, { paper = false } = {}) {
+// plain: the text as it is, without section headings marked. outline: a Word file with its
+// own headings, bold lines and numbered items marked (see docxOutline).
+async function extractDoc(path, buf, { paper = false, plain = false, outline = false } = {}) {
   const ext = extOf(path);
   const fileName = String(path).split('/').pop();
   try {
-    if (ext === 'pdf') { const d = await pdfDoc(buf); return { text: sectionize(d.text, paper || isPaper(d.text)), name: d.text.trim() ? describe(fileName, d.text, d.title, paper) : fileName }; }
-    if (ext === 'docx') { const text = await docxText(buf); return { text: sectionize(text, paper || isPaper(text)), name: describe(fileName, text, '', paper) }; }
+    if (ext === 'pdf') { const d = await pdfDoc(buf); return { text: plain ? d.text : sectionize(d.text, paper || isPaper(d.text)), name: d.text.trim() ? describe(fileName, d.text, d.title, paper) : fileName }; }
+    if (ext === 'docx' && outline) return { text: await docxOutline(buf), name: fileName };
+    if (ext === 'docx') { const text = await docxText(buf); return { text: plain ? text : sectionize(text, paper || isPaper(text)), name: describe(fileName, text, '', paper) }; }
   } catch {
     return { text: '', name: fileName }; // encrypted, scanned-image or damaged document
   }

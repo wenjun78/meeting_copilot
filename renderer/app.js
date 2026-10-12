@@ -475,12 +475,27 @@ function renderQa(list) {
     return li;
   }));
   $('qaEmpty').hidden = list.length > 0;
+  $('qaTools').hidden = list.length < 2;
+  $('qaCount').textContent = `${num(list.length)} questions`;
+  armQaClear(false);
   $('qaAdd').textContent = qa.editing >= 0 ? 'Save changes' : 'Add';
   $('qaCancel').hidden = qa.editing < 0;
   const chars = list.reduce((n, p) => n + p.q.length + Math.min(p.a.length, 1200) + 8, 0);
   $('qaState').textContent = qa.editing >= 0 ? 'Editing the highlighted answer' : !list.length ? ''
-    : `${num(list.length)} prepared ${list.length === 1 ? 'answer' : 'answers'}. ${chars <= 8000 ? 'All of them are offered with every question.' : 'The closest ones to each question are offered (about 8,000 characters fit).'}`;
+    : `${num(list.length)} prepared ${list.length === 1 ? 'answer' : 'answers'}. ${chars <= 16000 ? 'All of them are offered with every question.' : 'With each question, the ones closest to it are offered (about 16,000 characters, roughly 30 answers).'}`;
 }
+// "Remove all" asks once more before it empties the list.
+let qaClearTimer = 0;
+function armQaClear(on) {
+  clearTimeout(qaClearTimer);
+  $('qaClear').dataset.armed = on ? '1' : '';
+  $('qaClear').textContent = on ? `Click again to remove all ${num(qa.list.length)}` : 'Remove all';
+  if (on) qaClearTimer = setTimeout(() => armQaClear(false), 5000);
+}
+$('qaClear').addEventListener('click', async () => {
+  if (!$('qaClear').dataset.armed) return armQaClear(true);
+  try { clearQaForm(); renderQa(await call('qa:save', [])); toast('All prepared answers removed'); refreshIdle(); } catch (e) { fail(e); }
+});
 function clearQaForm() { qa.editing = -1; $('qaQ').value = ''; $('qaA').value = ''; }
 // Adds what is in the form, or saves the edit. Nothing happens unless both boxes are filled.
 async function saveQaDraft() {

@@ -139,6 +139,17 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await waitFor('edited', async () => /time-box/.test((await qaRows())[2].a) && await js(`document.getElementById('qaAdd').textContent === 'Add'`));
     await js(`document.querySelectorAll('#qaList li')[1].querySelectorAll('button')[1].click()`);
     await waitFor('removed', async () => (await qaRows()).length === 2);
+    // A numbered list in a PDF is read whole; "Remove all" empties the list after a second click.
+    const listAdd = await js(`window.mc.call('qa:importFiles', ${JSON.stringify([path.join(__dirname, 'fixtures', 'qa-list.pdf')])})`);
+    await openSection('qa');
+    const afterList = (await qaRows()).length;
+    await js(`document.getElementById('qaClear').click()`);
+    const armed = await js(`document.getElementById('qaClear').textContent`);
+    const stillThere = (await qaRows()).length;
+    await js(`document.getElementById('qaClear').click()`);
+    await waitFor('all removed', async () => (await qaRows()).length === 0);
+    step('numbered list and remove all', { added: listAdd.value && listAdd.value.added, afterList, armed, stillThere });
+    if (!listAdd.ok || listAdd.value.added !== 14 || afterList !== 16 || !/Click again to remove all 16/.test(armed) || stillThere !== 16) throw new Error('the numbered list was not read whole, or Remove all did not ask first');
     // A dropped file: the drop area is in view without opening anything, and a CSV is read.
     const dropShown = await js(`(() => { document.getElementById('qaMany').open = false; const r = document.getElementById('qaDrop').getBoundingClientRect(); return r.height > 20 && r.width > 100; })()`);
     fs.writeFileSync(path.join(drop, 'prep.csv'), 'Question,Answer\n"What is your notice period?","Three months, negotiable."\n');

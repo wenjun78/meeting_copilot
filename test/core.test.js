@@ -956,3 +956,36 @@ test('speech is written down as English or Mandarin only; anything else is trans
   assert.equal(new ConfigStore(file).load().stt.language, 'zh');
   assert.equal(new ConfigStore(path.join(path.dirname(file), 'none.json')).load().stt.language, 'en+zh');
 });
+
+test('Q&A files: a numbered list of 14 questions is read whole from PDF and Word, with wrapped questions, steps inside answers and section titles handled', async () => {
+  const { parseQA } = require('../src/qa');
+  const want = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'qa-list.json'), 'utf8')).map(([q, a]) => ({ q, a }));
+  const flat = (pairs) => pairs.map(p => ({ q: p.q, a: p.a.replace(/\s+/g, ' ') }));
+  // The PDF: lines cut at the page width, bold questions cut sooner, page numbers, section
+  // titles between questions, an answer with its own "1. 2. 3." steps, questions without "?".
+  // Word with typed numbers on heading lines, and Word numbering the questions itself (the
+  // numbers are then not in the text at all).
+  for (const file of ['qa-list.pdf', 'qa-headings.docx', 'qa-autonumbered.docx']) {
+    const { text } = await extractDoc(file, fs.readFileSync(path.join(__dirname, 'fixtures', file)), { plain: true, outline: true });
+    assert.deepEqual(flat(parseQA(text)), flat(want), file);
+  }
+
+  // The same as pasted text.
+  const pasted = parseQA('Prep notes\n\n1. Why this role?\nIt is the work I want. My reasons:\n1. scope,\n2. team,\n3. product.\n2. Explain idempotency\nRunning it twice gives the same result.\n\nBehavioural\n3) Tell me about a conflict.\nA disagreement over ETL ownership.\n4. Notice period?\nThree months.');
+  assert.deepEqual(pasted.map(p => p.q), ['Why this role?', 'Explain idempotency', 'Tell me about a conflict.', 'Notice period?']);
+  assert.equal(pasted[0].a, 'It is the work I want. My reasons:\n1. scope,\n2. team,\n3. product.');
+  assert.equal(pasted[1].a, 'Running it twice gives the same result.', 'the section title before question 3 is not part of the answer');
+  // Three numbered steps inside one answer do not turn a list of plain questions into three "questions".
+  assert.deepEqual(parseQA('Why us?\nThree reasons:\n1. scope,\n2. team,\n3. product.\n\nNotice period?\nThree months.\n\nSalary?\nMarket range.').map(p => p.q), ['Why us?', 'Notice period?', 'Salary?']);
+  // A title above "Q:"-less numbered questions, or a lone heading, does not decide the format.
+  assert.equal(parseQA('# My prep\n\n1. Why us?\nScope.\n2. Why now?\nTiming.\n3. Why you?\nFit.').length, 3);
+
+  // With a hundred prepared answers, words that are in many questions count for less.
+  const { rankPrepared } = require('../src/qa');
+  const many = [];
+  for (const t of ['a Spark job', 'an Airflow DAG', 'a Kafka consumer', 'a dbt model', 'a Delta table']) {
+    many.push({ q: `${t} is running slowly. What would you inspect first?`, a: 'x' }, { q: `${t} fails halfway through after partial data has been written. How would you recover safely?`, a: 'y' }, { q: `How do you monitor ${t} in production?`, a: 'z' });
+  }
+  assert.equal(rankPrepared(many, 'Okay, so say your Kafka consumer is slow, where do you look?')[0].q, 'a Kafka consumer is running slowly. What would you inspect first?');
+  assert.equal(rankPrepared(many, 'If a Spark job died midway and left partial data, how do you recover?')[0].q, 'a Spark job fails halfway through after partial data has been written. How would you recover safely?');
+});

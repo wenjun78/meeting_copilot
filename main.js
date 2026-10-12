@@ -459,7 +459,7 @@ function wireIpc() {
   handle('qa:save', (list) => qaWrite(list));
   handle('qa:importText', async (text) => {
     const found = parseQA(String(text || ''));
-    if (!found.length) throw new Error('No questions with answers found. Write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?" with the answer beneath.');
+    if (!found.length) throw new Error('No questions with answers found. Number the questions (1. 2. 3.) with each answer beneath, write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?".');
     return qaAppend(found);
   });
   handle('qa:importFiles', async (paths) => {
@@ -475,11 +475,11 @@ function wireIpc() {
       try {
         const size = fs.statSync(p).isFile() ? fs.statSync(p).size : -1;
         if (/\.(csv|tsv)$/i.test(p) && size >= 0 && size <= 2_000_000) pairs = parseQATable(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
-        else if (size >= 0 && isIndexable(path.basename(p), size)) pairs = parseQA(await extractText(path.basename(p), fs.readFileSync(p)));
+        else if (size >= 0 && isIndexable(path.basename(p), size)) pairs = parseQA((await extractDoc(path.basename(p), fs.readFileSync(p), { plain: true, outline: true })).text);
       } catch { /* unreadable */ }
       if (pairs.length) found.push(...pairs); else empty.push(path.basename(p));
     }
-    if (!found.length) throw new Error(`No questions with answers found in ${empty.join(', ')}. Write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?" with the answer beneath. A spreadsheet works when saved as CSV with a question column and an answer column.`);
+    if (!found.length) throw new Error(`No questions with answers found in ${empty.join(', ')}. Number the questions (1. 2. 3.) with each answer beneath, write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?". A spreadsheet works when saved as CSV with a question column and an answer column.`);
     return { ...(await qaAppend(found)), empty };
   });
   // Everything the answers can draw on: what is sent every time, and every searchable file.
