@@ -59,6 +59,30 @@ function parseQA(text) {
   return normalizePairs(pairs);
 }
 
+// A table saved as CSV or TSV: the first column is the question, the second the answer (a
+// header row naming them is skipped; with named columns, those named question and answer are used).
+function parseQATable(text) {
+  const src = clean(text);
+  const delim = (src.split('\n')[0].match(/\t/g) || []).length ? '\t' : ',';
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') quoted = false; else cell += ch;
+    } else if (ch === '"' && cell === '') quoted = true;
+    else if (ch === delim) { row.push(cell); cell = ''; }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  row.push(cell); rows.push(row);
+  let qi = 0, ai = 1, start = 0;
+  const head = (rows[0] || []).map(c => c.trim().toLowerCase());
+  const hq = head.findIndex(c => /^(questions?|q)$/.test(c)), ha = head.findIndex(c => /^(answers?|a|my answer|response|reply)$/.test(c));
+  if (hq >= 0 && ha >= 0) { qi = hq; ai = ha; start = 1; }
+  return normalizePairs(rows.slice(start).map(r => ({ q: r[qi], a: r[ai] })));
+}
+
 // Orders prepared answers by how close their question is to what was asked. The wording of a
 // spoken question rarely repeats the prepared one, so this only decides the order (and which
 // to name as used); the model is shown the answers and judges which one fits.
@@ -77,4 +101,4 @@ function rankPrepared(pairs, asked) {
   }).sort((x, y) => (y.match ? 1 : 0) - (x.match ? 1 : 0) || y.score - x.score || x.i - y.i).map(({ i, ...p }) => p);
 }
 
-module.exports = { QA_FILE, normalizePairs, parseQA, rankPrepared };
+module.exports = { QA_FILE, normalizePairs, parseQA, parseQATable, rankPrepared };

@@ -825,6 +825,11 @@ test('Q&A: prepared answers are read from pasted text, kept one per question, an
   assert.deepEqual(parseQA('## Tell me about yourself\n\nI am an AI engineer.\n\n## Why us?\nThe platform team.'), [{ q: 'Tell me about yourself', a: 'I am an AI engineer.' }, { q: 'Why us?', a: 'The platform team.' }]);
   assert.deepEqual(parseQA('1. Tell me about yourself?\nI am an AI engineer.\n\nFour years in data.\n\nWhy this role?\nIt fits. Does it not?\n'), [{ q: 'Tell me about yourself?', a: 'I am an AI engineer.\n\nFour years in data.' }, { q: 'Why this role?', a: 'It fits. Does it not?' }]);
   assert.deepEqual(parseQA('Just some notes with no questions.'), []);
+  // A spreadsheet saved as CSV: named columns in any order, quoted cells with commas and line breaks.
+  const { parseQATable } = require('../src/qa');
+  assert.deepEqual(parseQATable('Topic,Answer,Question\nHR,"I want scope, not just title.\nAnd a team that ships.","Why leave?"\nHR,"Three months, negotiable",Notice period?\n'), [
+    { q: 'Why leave?', a: 'I want scope, not just title.\nAnd a team that ships.' }, { q: 'Notice period?', a: 'Three months, negotiable' }]);
+  assert.deepEqual(parseQATable('Why us?\tThe "platform" team\nEmpty one\t\n'), [{ q: 'Why us?', a: 'The "platform" team' }]);
   // The same question again replaces the earlier answer; empty halves are dropped.
   assert.deepEqual(normalizePairs([{ q: 'Why us?', a: 'One' }, { q: 'x', a: '' }, { q: '  why us ', a: 'Two' }]), [{ q: 'why us', a: 'Two' }]);
 

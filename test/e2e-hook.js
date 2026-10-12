@@ -139,6 +139,13 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await waitFor('edited', async () => /time-box/.test((await qaRows())[2].a) && await js(`document.getElementById('qaAdd').textContent === 'Add'`));
     await js(`document.querySelectorAll('#qaList li')[1].querySelectorAll('button')[1].click()`);
     await waitFor('removed', async () => (await qaRows()).length === 2);
+    // A dropped file: the drop area is in view without opening anything, and a CSV is read.
+    const dropShown = await js(`(() => { document.getElementById('qaMany').open = false; const r = document.getElementById('qaDrop').getBoundingClientRect(); return r.height > 20 && r.width > 100; })()`);
+    fs.writeFileSync(path.join(drop, 'prep.csv'), 'Question,Answer\n"What is your notice period?","Three months, negotiable."\n');
+    const csvAdd = await js(`window.mc.call('qa:importFiles', ${JSON.stringify([path.join(drop, 'prep.csv')])})`);
+    if (!dropShown || !csvAdd.ok || csvAdd.value.added !== 1) throw new Error('the Q&A drop area is hidden or the CSV was not read');
+    await js(`window.mc.call('qa:save', ${JSON.stringify([{ q: 'How do you deal with duplicate customer records?', a: 'Two passes: exact match on tax ID, then fuzzy match on name and address at 0.92.' }, { q: 'What is your biggest weakness?', a: 'I over-prepare, so I time-box research to a day.' }])})`);
+    await openSection('qa');
     await new Promise(r => setTimeout(r, 300));
     await shot('2d-qa');
     const qaNow = await qaRows();
