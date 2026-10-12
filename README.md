@@ -226,7 +226,11 @@ time. Files you added are copies, read once when added.
 - **No screens listed (macOS)**: allow Screen Recording for the app in System
   Settings > Privacy & Security, then restart it.
 - **Words are wrong**: add names and acronyms under "Names and terms to get
-  right", and set the spoken language instead of auto-detect.
+  right". Speech is only written down as English or Mandarin: with "English
+  and Mandarin" a sentence that comes back in any other language is
+  transcribed once more in one of the two. If the whole meeting is in one
+  language, choose "English only" or "Mandarin only", which is the most
+  accurate.
 - **Rate limit messages**: free API tiers cap requests per minute; each
   utterance is one request.
 - **Screen text in another language**: set e.g. `eng+chi_sim`; the language

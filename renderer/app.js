@@ -651,7 +651,7 @@ function fillSettings() {
   $('keyState').textContent = s.llmKey ? 'A key is saved on this computer and stays until you replace it.' : 'No key saved yet. Paste one and press Save settings.';
   $('keyState').classList.toggle('warn', !s.llmKey);
   $('s-llm-extra').value = JSON.stringify(c.llm.extra || {});
-  $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = c.stt.language; $('s-stt-vocab').value = c.stt.vocabulary;
+  $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = ['en', 'zh'].includes(c.stt.language) ? c.stt.language : 'en+zh'; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
   $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;

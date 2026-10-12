@@ -11,7 +11,7 @@ const { parseRepoSpec, fetchRepo, listRepos } = require('../src/rag/github');
 const { ingestUrl, liveSearch, itemsFromJson } = require('../src/rag/api');
 const { ingestFolder } = require('../src/rag/local');
 const { KnowledgeBase } = require('../src/rag/kb');
-const { LLM, cleanTranscript } = require('../src/llm');
+const { LLM, cleanTranscript, speechLanguage, languageToForce } = require('../src/llm');
 const { detectQuestion } = require('../src/question');
 const { ConfigStore } = require('../src/config');
 const { SLOTS, NOTE, planPinned, moveLooseFilesIntoSections } = require('../src/slots');
@@ -149,7 +149,7 @@ test('transcription sends a WAV with the glossary prompt and filters non-speech'
   const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(100)]);
   assert.equal(await llm.transcribe(wav, { prompt: 'Glossary: CPM' }), 'How do you handle duplicate customer records?');
   const sent = srv.log.stt.at(-1);
-  assert.ok(sent.hasWav); assert.equal(sent.prompt, 'Glossary: CPM'); assert.equal(sent.model, 'whisper-large-v3');
+  assert.ok(sent.hasWav); assert.equal(sent.prompt, 'This meeting is in English and Mandarin Chinese. 这场会议使用英语和普通话。 Glossary: CPM'); assert.equal(sent.model, 'whisper-large-v3');
   await assert.rejects(new LLM(cfgFor({ llm: { baseUrl: srv.base + '/v1', apiKey: 'wrong', model: 'm' } })).transcribe(wav), /API key was rejected/);
   assert.equal(cleanTranscript({ text: 'Thanks for watching!' }), '');
   assert.equal(cleanTranscript({ segments: [{ text: ' Thank you.', no_speech_prob: 0.5, avg_logprob: -0.9 }] }), '');
@@ -249,7 +249,8 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   assert.match(prompt, /Them: How do you handle duplicate customer records\?/);
   assert.match(prompt, /Slide 4: Data quality KPIs/);
   assert.match(prompt, /\[2\] README\.md/);
-  assert.equal(srv.log.stt.at(-1).prompt, 'Glossary: CPM, Jaro-Winkler');
+  assert.equal(srv.log.stt.at(-1).prompt, 'This meeting is in English and Mandarin Chinese. 这场会议使用英语和普通话。 Glossary: CPM, Jaro-Winkler');
+  assert.equal(srv.log.stt.at(-1).language, '', 'with both languages allowed the service chooses per sentence');
 
   // The same words picked up by the microphone are treated as echo and dropped.
   const removed = new Promise(r => co.on('transcript', e => e.type === 'remove' && r(e)));
@@ -878,4 +879,75 @@ test('Q&A: prepared answers are read from pasted text, kept one per question, an
   assert.match(lean, /prepared[^\n]*\nQ: What are your salary expectations\?/);
   assert.ok(!/Answers I prepared/.test(co._buildMessages({ asked: 'x', mode: 'typed', refs: [], cfg: getConfig() })[1].content));
   await s2.close();
+});
+
+test('speech is written down as English or Mandarin only; anything else is transcribed again in one of the two', async () => {
+  assert.deepEqual(['', 'ms', 'auto', 'en', 'zh', 'en+zh', undefined].map(speechLanguage), ['en+zh', 'en+zh', 'en+zh', 'en', 'zh', 'en+zh', 'en+zh']);
+
+  // What counts as "neither", and which language the audio is tried in again.
+  assert.equal(languageToForce('So how do you handle duplicate customer records?', 'english'), '');
+  assert.equal(languageToForce('你平时怎么处理重复的客户记录？', 'chinese'), '');
+  assert.equal(languageToForce('我们用 Databricks 和 Spark 做 ETL', ''), '', 'Mandarin with English terms is fine');
+  assert.equal(languageToForce('Tell me about the pipeline you built at Lenovo', ''), '');
+  assert.equal(languageToForce('Databricks, Spark', ''), '', 'too short to judge: kept');
+  assert.equal(languageToForce('Saya rasa kita boleh mulakan mesyuarat sekarang', ''), 'en', 'Latin script that does not read as English');
+  assert.equal(languageToForce('Boleh you explain the pipeline', 'malay'), 'en', 'the service named another language');
+  assert.equal(languageToForce('重複した顧客レコードはどう処理しますか', 'japanese'), 'zh');
+  assert.equal(languageToForce('중복 고객 기록은 어떻게 처리합니까', ''), 'zh');
+  assert.equal(languageToForce('Как вы обрабатываете дубликаты', ''), 'en');
+  assert.equal(languageToForce('重复的客户记录', 'cantonese'), 'zh');
+
+  const make = async (lines, stt = {}) => {
+    const s = await mock.start({ sttLines: lines });
+    const getConfig = () => ({ llm: { baseUrl: s.base + '/v1', apiKey: 'test-key', model: 'chat-model' }, stt: { baseUrl: '', apiKey: '', model: 'whisper-large-v3', language: 'en+zh', vocabulary: '', ...stt } });
+    const llm = new LLM(getConfig); llm.retryDelayMs = 1;
+    return { s, llm };
+  };
+  const wav = Buffer.from('RIFF....WAVEfmt ');
+
+  // English heard as Malay: sent again as English, and that version is used.
+  let { s, llm } = await make([(req) => (req.language === 'en' ? { text: 'I think we can start the meeting now.', language: 'english' } : { text: 'Saya rasa kita boleh mulakan mesyuarat sekarang.', language: 'malay' })]);
+  assert.equal(await llm.transcribe(wav), 'I think we can start the meeting now.');
+  assert.deepEqual(s.log.stt.map(r => r.language), ['', 'en']);
+  assert.equal(s.log.stt[1].prompt, 'This meeting is in English.');
+  // English and Mandarin sentences pass straight through, one request each.
+  await s.close();
+  ({ s, llm } = await make([{ text: 'How do you handle duplicates?', language: 'english' }, { text: '你怎么处理重复的记录？', language: 'chinese' }]));
+  assert.equal(await llm.transcribe(wav), 'How do you handle duplicates?');
+  assert.equal(await llm.transcribe(wav), '你怎么处理重复的记录？');
+  assert.equal(s.log.stt.length, 2);
+  await s.close();
+  // Mandarin heard as Japanese: sent again as Mandarin.
+  ({ s, llm } = await make([(req) => (req.language === 'zh' ? { text: '重复的客户记录怎么处理？', language: 'chinese' } : { text: '重複した顧客レコードはどう処理しますか', language: 'japanese' })]));
+  assert.equal(await llm.transcribe(wav), '重复的客户记录怎么处理？');
+  assert.match(s.log.stt[1].prompt, /^这场会议使用普通话/);
+  await s.close();
+
+  // One language chosen: every request names it, and nothing is sent twice.
+  ({ s, llm } = await make(['Ini bukan bahasa Inggeris sama sekali ya'], { language: 'en' }));
+  await llm.transcribe(wav, { prompt: 'Glossary: CPM' });
+  assert.deepEqual(s.log.stt.map(r => [r.language, r.prompt]), [['en', 'This meeting is in English. Glossary: CPM']]);
+  await s.close();
+
+  // A model without the detailed reply format: found out once, then asked the plain way;
+  // with no language reported, the words themselves decide.
+  const heardAsMalay = (req) => (req.language === 'en' ? 'So what is your notice period?' : 'Jadi berapa lama tempoh notis anda sekarang?');
+  ({ s, llm } = await make([heardAsMalay, heardAsMalay, 'And when could you start with us?'], { model: 'plain-json-stt' }));
+  assert.equal(await llm.transcribe(wav), 'So what is your notice period?');
+  assert.equal(await llm.transcribe(wav), 'And when could you start with us?');
+  assert.deepEqual(s.log.stt.map(r => `${r.format}:${r.language}`), ['verbose_json:', 'json:', 'json:en', 'json:']);
+  await s.close();
+
+  // The hint coming back as the "speech" is silence, not a sentence.
+  ({ s, llm } = await make(['This meeting is in English.'], { language: 'en' }));
+  assert.equal(await llm.transcribe(wav), '');
+  await s.close();
+
+  // Saved settings: anything other than the two languages becomes "both".
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lang-')), 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ stt: { language: 'ms' } }));
+  assert.equal(new ConfigStore(file).load().stt.language, 'en+zh');
+  fs.writeFileSync(file, JSON.stringify({ stt: { language: 'zh' } }));
+  assert.equal(new ConfigStore(file).load().stt.language, 'zh');
+  assert.equal(new ConfigStore(path.join(path.dirname(file), 'none.json')).load().stt.language, 'en+zh');
 });

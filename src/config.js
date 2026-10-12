@@ -12,7 +12,7 @@ const DEFAULTS = {
   answerContext: 'full',              // 'full' | 'lean' (less sent per answer, for services with tight token limits)
   defaults: 2,                        // which set of defaults these settings were last brought up to
   llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-6.1-sol', extra: { reasoning_effort: 'low' } },
-  stt: { baseUrl: '', apiKey: '', model: 'gpt-4o-transcribe', language: '', vocabulary: '' },
+  stt: { baseUrl: '', apiKey: '', model: 'gpt-4o-transcribe', language: 'en+zh', vocabulary: '' }, // 'en+zh' | 'en' | 'zh'
   embed: { baseUrl: '', apiKey: '', model: '' },
   github: { token: '', apiBase: 'https://api.github.com' },
   api: { searchUrl: '', headerName: 'Authorization', headerValue: '' },
@@ -51,6 +51,8 @@ class ConfigStore {
     if ((raw.defaults || 1) < 2 && raw.llm && raw.llm.model === 'gpt-5.6-sol') raw.llm.model = 'gpt-6.1-sol';
     raw.defaults = DEFAULTS.defaults;
     this.data = merge(DEFAULTS, raw);
+    // Speech is read as English, Mandarin or both; any other saved setting becomes both.
+    if (!['en', 'zh', 'en+zh'].includes(this.data.stt.language)) this.data.stt.language = 'en+zh';
     // `extra` is free-form: keep exactly what the user saved, including {}.
     if (raw.llm && raw.llm.extra && typeof raw.llm.extra === 'object') this.data.llm.extra = raw.llm.extra;
     return this.data;
