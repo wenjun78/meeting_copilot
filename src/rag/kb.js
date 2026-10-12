@@ -156,7 +156,7 @@ class KnowledgeBase {
 
   // Answers the user prepared for questions they expect: [{q, a}]
   prepared() {
-    return this.chunks.filter(c => c.qa && c.qa.q && c.qa.a).map(c => ({ q: c.qa.q, a: c.qa.a }));
+    return this.chunks.filter(c => c.qa && c.qa.q && c.qa.a).map(c => ({ q: c.qa.q, a: c.qa.a, ...(c.vec ? { vec: c.vec } : {}) }));
   }
 
   // Notes that go to the model with every answer: [{path, url, title, text}]

@@ -40,7 +40,7 @@ async function ingestFolder(folder, { maxFiles = 2000, sections = false } = {}) 
       let pairs = [];
       try {
         if (parts[1] === QA_FILE) pairs = normalizePairs(JSON.parse(fs.readFileSync(f.full, 'utf8')));
-        else if (isIndexable(f.rel, st.size)) pairs = parseQA((await extractDoc(f.rel, fs.readFileSync(f.full))).text);
+        else if (isIndexable(f.rel, st.size)) pairs = parseQA((await extractDoc(f.rel, fs.readFileSync(f.full), { plain: true, outline: true })).text);
       } catch { /* unreadable list: nothing prepared */ }
       if (!pairs.length) { skipped++; continue; }
       files++; bytes += st.size; newest = Math.max(newest, st.mtimeMs);

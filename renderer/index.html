@@ -108,11 +108,12 @@
         <details class="qa-many" id="qaMany">
           <summary>Add several at once</summary>
           <textarea id="qaBulk" rows="7" placeholder="Q: Tell me about yourself&#10;A: I am ...&#10;&#10;Q: Why this role?&#10;A: ..." aria-label="Several questions and answers"></textarea>
-          <div class="row"><button id="qaBulkAdd" class="btn" type="button">Add all</button><span class="hint">Write each as Q: and A:, or put each question on its own line ending in "?" with the answer beneath.</span></div>
-          <div class="drop" id="qaDrop" role="button" tabindex="0">
-            <strong>Drop a file of questions and answers</strong><span>or click to choose one. Word, PDF, Markdown or text, written the same way.</span>
-          </div>
+          <div class="row"><button id="qaBulkAdd" class="btn" type="button">Add all</button><span class="hint">Write each as Q: and A:, number the questions (1. 2. 3.), or put each question on its own line ending in "?", with the answer beneath.</span></div>
         </details>
+        <div class="drop" id="qaDrop" role="button" tabindex="0">
+          <strong>Drop a file of questions and answers here</strong><span>or click to choose one. Word, PDF, Markdown or text: numbered questions, questions as headings or in bold, or Q: and A:. Or a CSV with a question column and an answer column.</span>
+        </div>
+        <div class="row" id="qaTools" hidden><span class="hint" id="qaCount"></span><button id="qaClear" class="btn quiet" type="button">Remove all</button></div>
         <ul class="qa-list" id="qaList"></ul>
         <p class="empty" id="qaEmpty">Nothing prepared yet. Add the questions you expect and how you want to answer them.</p>
       </section>
@@ -209,7 +210,7 @@
           <legend>Advanced</legend>
           <label>Speech-to-text base URL, if different <input id="s-stt-base" type="text"></label>
           <label>Speech-to-text API key <input id="s-stt-key" type="password"></label>
-          <label>Embedding model, for meaning-based search <input id="s-embed-model" type="text" placeholder="Leave empty for keyword search"></label>
+          <label>Embedding model, for search by meaning <input id="s-embed-model" type="text" placeholder="Automatic with OpenAI (text-embedding-3-small). Type off for keywords only"></label>
           <label>Embedding base URL <input id="s-embed-base" type="text"></label>
           <label>Embedding API key <input id="s-embed-key" type="password"></label>
           <label>Extra chat parameters (JSON) <input id="s-llm-extra" type="text"></label>

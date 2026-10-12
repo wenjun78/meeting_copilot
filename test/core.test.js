@@ -825,6 +825,11 @@ test('Q&A: prepared answers are read from pasted text, kept one per question, an
   assert.deepEqual(parseQA('## Tell me about yourself\n\nI am an AI engineer.\n\n## Why us?\nThe platform team.'), [{ q: 'Tell me about yourself', a: 'I am an AI engineer.' }, { q: 'Why us?', a: 'The platform team.' }]);
   assert.deepEqual(parseQA('1. Tell me about yourself?\nI am an AI engineer.\n\nFour years in data.\n\nWhy this role?\nIt fits. Does it not?\n'), [{ q: 'Tell me about yourself?', a: 'I am an AI engineer.\n\nFour years in data.' }, { q: 'Why this role?', a: 'It fits. Does it not?' }]);
   assert.deepEqual(parseQA('Just some notes with no questions.'), []);
+  // A spreadsheet saved as CSV: named columns in any order, quoted cells with commas and line breaks.
+  const { parseQATable } = require('../src/qa');
+  assert.deepEqual(parseQATable('Topic,Answer,Question\nHR,"I want scope, not just title.\nAnd a team that ships.","Why leave?"\nHR,"Three months, negotiable",Notice period?\n'), [
+    { q: 'Why leave?', a: 'I want scope, not just title.\nAnd a team that ships.' }, { q: 'Notice period?', a: 'Three months, negotiable' }]);
+  assert.deepEqual(parseQATable('Why us?\tThe "platform" team\nEmpty one\t\n'), [{ q: 'Why us?', a: 'The "platform" team' }]);
   // The same question again replaces the earlier answer; empty halves are dropped.
   assert.deepEqual(normalizePairs([{ q: 'Why us?', a: 'One' }, { q: 'x', a: '' }, { q: '  why us ', a: 'Two' }]), [{ q: 'why us', a: 'Two' }]);
 
@@ -950,4 +955,83 @@ test('speech is written down as English or Mandarin only; anything else is trans
   fs.writeFileSync(file, JSON.stringify({ stt: { language: 'zh' } }));
   assert.equal(new ConfigStore(file).load().stt.language, 'zh');
   assert.equal(new ConfigStore(path.join(path.dirname(file), 'none.json')).load().stt.language, 'en+zh');
+});
+
+test('Q&A files: a numbered list of 14 questions is read whole from PDF and Word, with wrapped questions, steps inside answers and section titles handled', async () => {
+  const { parseQA } = require('../src/qa');
+  const want = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'qa-list.json'), 'utf8')).map(([q, a]) => ({ q, a }));
+  const flat = (pairs) => pairs.map(p => ({ q: p.q, a: p.a.replace(/\s+/g, ' ') }));
+  // The PDF: lines cut at the page width, bold questions cut sooner, page numbers, section
+  // titles between questions, an answer with its own "1. 2. 3." steps, questions without "?".
+  // Word with typed numbers on heading lines, and Word numbering the questions itself (the
+  // numbers are then not in the text at all).
+  for (const file of ['qa-list.pdf', 'qa-headings.docx', 'qa-autonumbered.docx']) {
+    const { text } = await extractDoc(file, fs.readFileSync(path.join(__dirname, 'fixtures', file)), { plain: true, outline: true });
+    assert.deepEqual(flat(parseQA(text)), flat(want), file);
+  }
+
+  // The same as pasted text.
+  const pasted = parseQA('Prep notes\n\n1. Why this role?\nIt is the work I want. My reasons:\n1. scope,\n2. team,\n3. product.\n2. Explain idempotency\nRunning it twice gives the same result.\n\nBehavioural\n3) Tell me about a conflict.\nA disagreement over ETL ownership.\n4. Notice period?\nThree months.');
+  assert.deepEqual(pasted.map(p => p.q), ['Why this role?', 'Explain idempotency', 'Tell me about a conflict.', 'Notice period?']);
+  assert.equal(pasted[0].a, 'It is the work I want. My reasons:\n1. scope,\n2. team,\n3. product.');
+  assert.equal(pasted[1].a, 'Running it twice gives the same result.', 'the section title before question 3 is not part of the answer');
+  // Three numbered steps inside one answer do not turn a list of plain questions into three "questions".
+  assert.deepEqual(parseQA('Why us?\nThree reasons:\n1. scope,\n2. team,\n3. product.\n\nNotice period?\nThree months.\n\nSalary?\nMarket range.').map(p => p.q), ['Why us?', 'Notice period?', 'Salary?']);
+  // A title above "Q:"-less numbered questions, or a lone heading, does not decide the format.
+  assert.equal(parseQA('# My prep\n\n1. Why us?\nScope.\n2. Why now?\nTiming.\n3. Why you?\nFit.').length, 3);
+
+  // With a hundred prepared answers, words that are in many questions count for less.
+  const { rankPrepared } = require('../src/qa');
+  const many = [];
+  for (const t of ['a Spark job', 'an Airflow DAG', 'a Kafka consumer', 'a dbt model', 'a Delta table']) {
+    many.push({ q: `${t} is running slowly. What would you inspect first?`, a: 'x' }, { q: `${t} fails halfway through after partial data has been written. How would you recover safely?`, a: 'y' }, { q: `How do you monitor ${t} in production?`, a: 'z' });
+  }
+  assert.equal(rankPrepared(many, 'Okay, so say your Kafka consumer is slow, where do you look?')[0].q, 'a Kafka consumer is running slowly. What would you inspect first?');
+  assert.equal(rankPrepared(many, 'If a Spark job died midway and left partial data, how do you recover?')[0].q, 'a Spark job fails halfway through after partial data has been written. How would you recover safely?');
+});
+
+test('search by meaning: on by itself with OpenAI, and prepared answers are found for a question asked in other words', async () => {
+  // Which embedding model is used.
+  const model = (llmCfg, embed = {}) => new LLM(() => ({ llm: llmCfg, embed: { baseUrl: '', apiKey: '', model: '', ...embed } })).embedModel();
+  assert.equal(model({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-x' }), 'text-embedding-3-small');
+  assert.equal(model({ baseUrl: 'https://api.openai.com/v1', apiKey: '' }), '', 'no key yet: nothing to call');
+  assert.equal(model({ baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'gsk' }), '', 'a service without embeddings keeps to keywords');
+  assert.equal(model({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-x' }, { model: 'off' }), '');
+  assert.equal(model({ baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'gsk' }, { model: 'nomic-embed', baseUrl: 'http://localhost:11434/v1' }), 'nomic-embed');
+  assert.equal(model({ baseUrl: 'https://api.openai.com.evil.example/v1', apiKey: 'sk-x' }), '');
+
+  // Prepared answers whose wording shares nothing with what is asked.
+  const { QA_FILE, rankPrepared } = require('../src/qa');
+  const pairs = [
+    { q: 'What are your salary expectations?', a: 'Market range for a senior AI engineer.' },
+    { q: 'How do you remove entries that appear twice?', a: 'Exact match on tax ID, then fuzzy match at 0.92.' },
+    { q: 'How do you run jobs every night?', a: 'Airflow with a nightly schedule and retries.' },
+  ];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-sem-'));
+  fs.mkdirSync(path.join(dir, 'qa'));
+  fs.writeFileSync(path.join(dir, 'qa', QA_FILE), JSON.stringify(pairs));
+  const kb = new KnowledgeBase(null);
+  kb.setSource(await ingestFolder(dir, { sections: true }));
+  const getConfig = cfgFor({ embed: { baseUrl: '', apiKey: '', model: 'embed-model' } });
+  const llm = new LLM(getConfig);
+  assert.equal(await kb.embedMissing(t => llm.embed(t), llm.embedModel()), 3);
+  assert.ok(kb.prepared().every(p => p.vec && p.vec.length === 3));
+
+  const asked = 'What if the same company shows up in the data more than once?';
+  assert.ok(!rankPrepared(kb.prepared(), asked)[0].match, 'by wording alone nothing matches');
+  const [vec] = await llm.embed([asked]);
+  const ranked = rankPrepared(kb.prepared(), asked, vec);
+  assert.equal(ranked[0].q, 'How do you remove entries that appear twice?');
+  assert.ok(ranked[0].match && !ranked[1].match);
+  assert.ok(!('vec' in ranked[0]), 'the numbers stay out of what is passed on');
+
+  // In a meeting: the question is embedded once, and the prepared answer leads the block and the sources.
+  const co = new Copilot({ getConfig, llm, kb, debounceMs: 20 });
+  let sources = null;
+  co.on('answer', e => { if (e.type === 'sources') sources = e.sources; });
+  const before = srv.log.embed.length;
+  await co.answer({ mode: 'typed', question: asked });
+  assert.equal(srv.log.embed.length, before + 1);
+  assert.match(srv.log.chat.at(-1).messages[1].content, /Answers I prepared[^\n]*\nQ: How do you remove entries that appear twice\?/);
+  assert.deepEqual(sources.filter(x => x.n === 'Q').map(x => x.title), ['Prepared: How do you remove entries that appear twice?']);
 });

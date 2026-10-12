@@ -154,7 +154,7 @@ Everything lives in the **Knowledge** tab, organised by what it is:
 | CV | Your CV: paste it or add the PDF/Word file | Sent with every answer |
 | JD | The job description, agenda or brief for this meeting | Sent with every answer |
 | Instructions | Tone, length, what to stress or avoid | Sent with every answer |
-| Q&A | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or read from a file | Offered with every question, closest first (about 8,000 characters fit); when the question asked is the same or similar, the reply is built on your answer |
+| Q&A | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or dropped as a file (Word, PDF, Markdown or text with numbered questions, questions as headings or in bold, or `Q:` / `A:`; or a CSV with question and answer columns) | Offered with every question, closest first (about 16,000 characters fit, roughly 30 answers); when the question asked is the same or similar, the reply is built on your answer |
 | Publications | Your papers: add the PDF or Word file; type how you sum each one up | Searched section by section (methods, results, limitations); each paper's title and abstract, and what you typed, sent with every answer |
 | Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
 | Equipped | Nothing to fill in: it shows what the above adds up to | |
@@ -191,8 +191,12 @@ experience. Markdown gives the cleanest results (`##` headings become
 passages); PDF and Word are read too, though multi-column layouts can come
 out jumbled, and scanned PDFs have no text to read.
 
-Retrieval is keyword-based and works offline once synced. Set an embedding
-model under Settings > More to add meaning-based matching.
+Search is by keywords and, with OpenAI, also by meaning: passages and prepared
+answers are embedded once with `text-embedding-3-small` (same key, a few
+cents for thousands of passages) and each question is embedded when asked, so
+a question worded differently still finds its passage or prepared answer.
+Other services keep to keywords unless an embedding model is named under
+Settings > More; type `off` there to use keywords only.
 
 ### Staying up to date
 

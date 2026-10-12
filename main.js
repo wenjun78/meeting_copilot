@@ -15,7 +15,7 @@ const { extractText, extractDoc } = require('./src/rag/extract');
 const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
-const { QA_FILE, normalizePairs, parseQA } = require('./src/qa');
+const { QA_FILE, normalizePairs, parseQA, parseQATable } = require('./src/qa');
 const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -282,13 +282,20 @@ async function autoSync({ force = false } = {}) {
   return { updated, failures };
 }
 
+// Gives every passage (and prepared answer) the numbers that let it be found by meaning.
+// Only what is new is sent. After a failure it is not tried again until the settings change
+// or the app restarts, and the reason is shown once. -> how many passages were embedded
+let embedFailedFor = '';
 async function embedIfConfigured() {
-  if (!llm.embedConfigured()) return;
+  const model = llm.embedModel();
+  if (!model || embedFailedFor === model) return 0;
   try {
-    await kb.embedMissing(t => llm.embed(t), config.get().embed.model,
-      (done, total) => send('kb', { type: 'progress', message: `Embedding passages ${done} of ${total}` }));
+    return await kb.embedMissing(t => llm.embed(t), model,
+      (done, total) => send('kb', { type: 'progress', message: `Preparing search by meaning: ${done} of ${total} passages` }));
   } catch (e) {
-    send('notice', { level: 'error', message: `${e.message} Keyword search still works.` });
+    embedFailedFor = model;
+    send('notice', { level: 'error', message: `Search by meaning is off for now: ${e.message} Search by keywords still works.` });
+    return 0;
   }
 }
 
@@ -376,15 +383,17 @@ function wireIpc() {
 
   handle('config:get', () => publicConfig());
   handle('config:set', (patch) => {
-    const before = config.get().embed.model;
+    const before = llm.embedModel();
     config.update(patch);
     if (patch.ui && patch.ui.opacity && win) win.setOpacity(Math.max(0.35, Math.min(1, patch.ui.opacity)));
     if (patch.shortcuts) {
       const failed = registerShortcuts();
       if (failed.length) send('notice', { level: 'error', message: shortcutFailure(failed) });
     }
-    if (config.get().embed.model && config.get().embed.model !== before && kb.chunks.length) {
-      embedIfConfigured().then(() => { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); });
+    // A key or model that makes search by meaning possible: prepare what is already there.
+    if (llm.embedModel() !== before || patch.llm || patch.embed) embedFailedFor = '';
+    if (llm.embedModel() && (llm.embedModel() !== before || kb.chunks.some(c => !c.vec)) && kb.chunks.length) {
+      embedIfConfigured().then((n) => { if (n) { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); } });
     }
     return publicConfig();
   });
@@ -459,23 +468,27 @@ function wireIpc() {
   handle('qa:save', (list) => qaWrite(list));
   handle('qa:importText', async (text) => {
     const found = parseQA(String(text || ''));
-    if (!found.length) throw new Error('No questions with answers found. Write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?" with the answer beneath.');
+    if (!found.length) throw new Error('No questions with answers found. Number the questions (1. 2. 3.) with each answer beneath, write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?".');
     return qaAppend(found);
   });
   handle('qa:importFiles', async (paths) => {
     if (!Array.isArray(paths)) {
       const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: 'Add questions and answers from a file',
-        filters: [{ name: 'Documents and notes', extensions: ['docx', 'pdf', 'md', 'txt'] }, { name: 'All files', extensions: ['*'] }] });
+        filters: [{ name: 'Documents, notes and tables', extensions: ['docx', 'pdf', 'md', 'txt', 'csv', 'tsv'] }, { name: 'All files', extensions: ['*'] }] });
       if (r.canceled || !r.filePaths.length) return null;
       paths = r.filePaths;
     }
     const found = [], empty = [];
     for (const p of paths.filter(x => typeof x === 'string' && x)) {
       let pairs = [];
-      try { if (fs.statSync(p).isFile() && isIndexable(path.basename(p), fs.statSync(p).size)) pairs = parseQA(await extractText(path.basename(p), fs.readFileSync(p))); } catch { /* unreadable */ }
+      try {
+        const size = fs.statSync(p).isFile() ? fs.statSync(p).size : -1;
+        if (/\.(csv|tsv)$/i.test(p) && size >= 0 && size <= 2_000_000) pairs = parseQATable(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
+        else if (size >= 0 && isIndexable(path.basename(p), size)) pairs = parseQA((await extractDoc(path.basename(p), fs.readFileSync(p), { plain: true, outline: true })).text);
+      } catch { /* unreadable */ }
       if (pairs.length) found.push(...pairs); else empty.push(path.basename(p));
     }
-    if (!found.length) throw new Error(`No questions with answers found in ${empty.join(', ')}. Write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?" with the answer beneath.`);
+    if (!found.length) throw new Error(`No questions with answers found in ${empty.join(', ')}. Number the questions (1. 2. 3.) with each answer beneath, write each as "Q: ..." then "A: ...", or put each question on its own line ending in "?". A spreadsheet works when saved as CSV with a question column and an answer column.`);
     return { ...(await qaAppend(found)), empty };
   });
   // Everything the answers can draw on: what is sent every time, and every searchable file.
@@ -647,7 +660,9 @@ app.whenReady().then(() => {
   movePapersToPublications(myFilesDir(), async (file) => /^Publication \(research paper\)/.test((await extractDoc(path.basename(file), fs.readFileSync(file))).name))
     .then((moved) => { if (moved.length) send('notice', { level: 'info', message: `Moved to Publications: ${moved.join(', ')}` }); })
     .catch(() => {})
-    .then(() => syncMine()).catch(() => {});
+    .then(() => syncMine()).catch(() => {})
+    // Passages added before search by meaning was available get their numbers now.
+    .then(() => embedIfConfigured()).then((n) => { if (n) { kb.save(); send('kb', { type: 'changed', stats: publicStats() }); } }).catch(() => {});
 
   // Background jobs: refresh sources shortly after launch and every half hour; look for app updates.
   setupUpdates();

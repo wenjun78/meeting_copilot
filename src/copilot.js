@@ -199,12 +199,13 @@ class Copilot extends EventEmitter {
         const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).map(e => e.text).join(' ');
         query = `${asked} ${prev}`;
       }
-      const [local, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
+      const [{ hits: local, vec }, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
       // Answers prepared in advance go to the model in their own block, closest first: those
-      // the search found for this question, then by how alike the questions are worded.
+      // the search found for this question, then by how alike the questions are (in meaning
+      // when search by meaning is on, in wording otherwise).
       const found = new Set(local.filter(r => r.qa).map(r => r.qa.q));
-      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query)
+      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query, vec)
         .map(p => ({ ...p, found: found.has(p.q) }))
         .sort((a, b) => ((b.match ? 2 : 0) + (b.found ? 1 : 0)) - ((a.match ? 2 : 0) + (a.found ? 1 : 0)));
       const refs = [...live, ...local.filter(r => !r.qa)].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
@@ -255,7 +256,7 @@ class Copilot extends EventEmitter {
         vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
       } catch { /* fall back to keyword search */ }
     }
-    return this.kb.search(query, 8, vec);
+    return { hits: this.kb.search(query, 8, vec), vec };
   }
 
   async _searchLive(query, cfg) {
@@ -329,7 +330,7 @@ class Copilot extends EventEmitter {
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     // Prepared answers, closest first, as many as fit. In lean mode only the closest few.
     const ready = [];
-    let space = lean ? 1500 : 8000;
+    let space = lean ? 1500 : 16000;
     for (const p of prepared) {
       const item = `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`;
       if (item.length > space) { if (ready.length) break; continue; }

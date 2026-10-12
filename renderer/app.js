@@ -475,12 +475,27 @@ function renderQa(list) {
     return li;
   }));
   $('qaEmpty').hidden = list.length > 0;
+  $('qaTools').hidden = list.length < 2;
+  $('qaCount').textContent = `${num(list.length)} questions`;
+  armQaClear(false);
   $('qaAdd').textContent = qa.editing >= 0 ? 'Save changes' : 'Add';
   $('qaCancel').hidden = qa.editing < 0;
   const chars = list.reduce((n, p) => n + p.q.length + Math.min(p.a.length, 1200) + 8, 0);
   $('qaState').textContent = qa.editing >= 0 ? 'Editing the highlighted answer' : !list.length ? ''
-    : `${num(list.length)} prepared ${list.length === 1 ? 'answer' : 'answers'}. ${chars <= 8000 ? 'All of them are offered with every question.' : 'The closest ones to each question are offered (about 8,000 characters fit).'}`;
+    : `${num(list.length)} prepared ${list.length === 1 ? 'answer' : 'answers'}. ${chars <= 16000 ? 'All of them are offered with every question.' : `With each question, the ones closest to it ${state.kb.embedded ? 'in meaning' : 'in wording'} are offered, roughly 30 at a time.`}`;
 }
+// "Remove all" asks once more before it empties the list.
+let qaClearTimer = 0;
+function armQaClear(on) {
+  clearTimeout(qaClearTimer);
+  $('qaClear').dataset.armed = on ? '1' : '';
+  $('qaClear').textContent = on ? `Click again to remove all ${num(qa.list.length)}` : 'Remove all';
+  if (on) qaClearTimer = setTimeout(() => armQaClear(false), 5000);
+}
+$('qaClear').addEventListener('click', async () => {
+  if (!$('qaClear').dataset.armed) return armQaClear(true);
+  try { clearQaForm(); renderQa(await call('qa:save', [])); toast('All prepared answers removed'); refreshIdle(); } catch (e) { fail(e); }
+});
 function clearQaForm() { qa.editing = -1; $('qaQ').value = ''; $('qaA').value = ''; }
 // Adds what is in the form, or saves the edit. Nothing happens unless both boxes are filled.
 async function saveQaDraft() {
@@ -595,7 +610,7 @@ async function renderEquipped() {
   const inv = await call('kb:inventory');
   const sent = inv.always.reduce((n, a) => n + a.sent, 0);
   const files = inv.searched.reduce((n, s) => n + s.files.length, 0);
-  $('eqSummary').textContent = `${inv.always.length ? `${inv.always.length} ${inv.always.length === 1 ? 'note is' : 'notes are'} sent with every answer (${num(sent)} characters, about ${num(Math.round(sent / 6))} words).` : 'Nothing is sent with every answer yet.'} ${num(files)} ${files === 1 ? 'file' : 'files'} can be searched (${num(inv.passages)} passages).${inv.lean ? ' Lean mode is on, so less is sent.' : ''}`;
+  $('eqSummary').textContent = `${inv.always.length ? `${inv.always.length} ${inv.always.length === 1 ? 'note is' : 'notes are'} sent with every answer (${num(sent)} characters, about ${num(Math.round(sent / 6))} words).` : 'Nothing is sent with every answer yet.'} ${num(files)} ${files === 1 ? 'file' : 'files'} can be searched (${num(inv.passages)} passages).${inv.lean ? ' Lean mode is on, so less is sent.' : ''}${state.kb.embedded ? ' Search is by meaning as well as keywords.' : ' Search is by keywords.'}`;
   $('eqAlways').replaceChildren(...(inv.always.length ? inv.always.map(a => el('li', {},
     previewRow(a.title, a.sent < a.chars ? (a.sent ? `first ${num(a.sent)} of ${num(a.chars)} characters sent` : `not sent: the limit is used up (${num(a.chars)} characters)`) : `${num(a.chars)} characters`, a.sourceId, a.path, a.sent < a.chars)))
     : [el('li', {}, el('p', { class: 'empty', text: 'Fill in About me, CV and JD to give every answer your background and the role.' }))]));
