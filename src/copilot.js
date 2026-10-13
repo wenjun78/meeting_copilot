@@ -122,7 +122,7 @@ class Copilot extends EventEmitter {
       if (e.id <= this.lastAnsweredId) break;
       if (run.length && run[0].t - e.t > 30000) break;
       run.unshift(e);
-      if (run.length >= 4) break;
+      if (run.length >= 8) break; // a long question arrives in several pieces
     }
     return run;
   }

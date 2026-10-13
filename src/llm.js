@@ -41,6 +41,8 @@ function languageToForce(text, detected = '') {
   if (named) return '';
   // No language reported: Chinese characters are Mandarin; Latin text has to read as English.
   if (/[一-鿿]/.test(text)) return '';
+  // Accented letters are not English: a short line such as "Definições." is a mishearing.
+  if (/[\u00C0-\u024F]/.test(text)) return 'en';
   const words = text.toLowerCase().match(/[a-z']+/g) || [];
   if (words.length < 5) return '';
   let common = 0; for (const w of words) if (ENGLISH.has(w)) common++;

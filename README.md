@@ -142,7 +142,12 @@ virus detection. Choose "More info", then "Run anyway".
 | Linux | Choose the "Monitor of ..." PulseAudio/PipeWire device under Settings > Their audio. |
 
 Use headphones. With speakers, your microphone also hears the other side;
-duplicates are filtered, but headphones give a cleaner transcript.
+what it picks up while they are talking is left out, but headphones give a
+cleaner transcript and keep your own words when you both speak at once.
+
+A saved transcript ends with how much speech was recorded from each side. If
+that is far less than was said, the audio is not reaching the app: check the
+system volume and the devices under Settings.
 
 ## What the answers draw on
 

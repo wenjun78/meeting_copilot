@@ -1108,3 +1108,141 @@ test('an answer is not started over for a few trailing words, and waits longer w
   await wait(70);
   assert.deepEqual(lines, ['你怎么处理重复的客户记录']);
 });
+
+// ---- speech capture ------------------------------------------------------------------
+// The segmenter runs in the window; here it is loaded on its own and fed real (synthesized)
+// speech: three phrases of a question, at different loudness, with pauses, over noise.
+const { Segmenter } = (() => {
+  const ctx = { window: {}, navigator: {} };
+  require('vm').createContext(ctx);
+  require('vm').runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'capture.js'), 'utf8') + '\nthis.Segmenter = Segmenter;', ctx);
+  return ctx;
+})();
+const BLOCK = 512, RATE = 16000;
+const phrase = (name) => { // 16 kHz mu-law -> samples in -1..1
+  const b = fs.readFileSync(path.join(__dirname, 'fixtures', `phrase-${name}.ulaw`)), out = new Float32Array(b.length);
+  for (let i = 0; i < b.length; i++) { const u = ~b[i] & 0xff, t = (((u & 0x0f) << 3) + 0x84) << ((u & 0x70) >> 4); out[i] = ((u & 0x80) ? (0x84 - t) : (t - 0x84)) / 32768; }
+  return out;
+};
+const PHRASES = ['a', 'b', 'c'].map(phrase);
+const speechLevel = (w) => { let x = 0, n = 0; for (const v of w) if (Math.abs(v) > 0.01) { x += v * v; n++; } return Math.sqrt(x / n); };
+// parts: [{ w, level, gapBefore (s) }] -> { signal, speech: Uint8Array per block }
+function scene(parts, noise, seed = 5) {
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  let pos = 0; const at = [];
+  for (const p of parts) { pos += Math.round(p.gapBefore * RATE); at.push(pos); pos += p.w.length; }
+  const total = Math.ceil((pos + RATE * 1.5) / BLOCK) * BLOCK;
+  const signal = new Float32Array(total), clean = new Float32Array(total);
+  parts.forEach((p, k) => { const g = p.level / speechLevel(p.w); for (let i = 0; i < p.w.length; i++) { signal[at[k] + i] += p.w[i] * g; clean[at[k] + i] = p.w[i]; } });
+  for (let i = 0; i < total; i++) signal[i] += (rnd() * 2 - 1) * noise * 1.73;
+  const speech = new Uint8Array(total / BLOCK);
+  for (let b = 0; b < speech.length; b++) { let e = 0; for (let i = 0; i < BLOCK; i++) e += clean[b * BLOCK + i] ** 2; speech[b] = Math.sqrt(e / BLOCK) > 0.01 ? 1 : 0; }
+  return { signal, speech };
+}
+// -> { kept: share of speech blocks inside emitted segments, segments: [seconds], seconds }
+function segment(signal, speech, opts) {
+  const got = new Uint8Array(speech.length), segments = [];
+  let idx = 0, covered = 0;
+  const seg = new Segmenter((pcm) => { segments.push(pcm.length / RATE); for (let i = Math.max(0, idx + 1 - covered); i <= idx; i++) got[i] = 1; }, () => {}, () => {}, opts);
+  const finish = seg._finish.bind(seg);
+  seg._finish = (...a) => { covered = seg.cur ? seg.cur.blocks.length : 0; return finish(...a); };
+  for (idx = 0; idx < speech.length; idx++) seg.push(signal.subarray(idx * BLOCK, (idx + 1) * BLOCK));
+  seg.flush();
+  let all = 0, kept = 0;
+  for (let b = 0; b < speech.length; b++) if (speech[b]) { all++; if (got[b]) kept++; }
+  return { kept: all ? kept / all : 1, segments, seconds: segments.reduce((a, b) => a + b, 0), seg };
+}
+
+test('speech capture: a question spoken in pieces, loud then quiet, is recorded whole', () => {
+  const [a, b, c] = PHRASES;
+  // The old detector raised its background level during a loud phrase and then shut out the
+  // quieter words that followed: "some highlights of your career progress" was heard, "and
+  // what makes you consider applying" was not.
+  for (const [label, noise, levels] of [
+    ['clean line', 0.001, [0.08, 0.08, 0.08]],
+    ['quiet after loud', 0.003, [0.09, 0.02, 0.03]],
+    ['low system volume', 0.0015, [0.012, 0.006, 0.01]],
+    ['noisy line', 0.008, [0.06, 0.03, 0.05]],
+  ]) {
+    const { signal, speech } = scene([{ w: a, level: levels[0], gapBefore: 1.5 }, { w: b, level: levels[1], gapBefore: 0.45 }, { w: c, level: levels[2], gapBefore: 1.1 }], noise);
+    const r = segment(signal, speech, { K: Segmenter.THEM });
+    assert.ok(r.kept >= 0.97, `${label}: ${(r.kept * 100).toFixed(0)}% of the speech was recorded`);
+    assert.ok(r.segments.length >= 1 && r.segments.length <= 4, `${label}: ${r.segments.length} pieces`);
+  }
+});
+
+test('speech capture: a long turn is cut into pieces without a gap between them', () => {
+  const [a, b, c] = PHRASES;
+  // About half a minute of speech with no real pause: breaths of 0.1 to 0.3 s only.
+  const parts = [];
+  for (let i = 0; i < 9; i++) parts.push({ w: [a, b, c][i % 3], level: 0.05, gapBefore: i ? 0.1 + (i % 3) * 0.1 : 1 });
+  const { signal, speech } = scene(parts, 0.002);
+  const r = segment(signal, speech, { K: Segmenter.THEM });
+  assert.ok(r.kept >= 0.995, `${(r.kept * 100).toFixed(1)}% recorded`);
+  assert.ok(r.segments.length >= 2 && r.segments.every(s => s <= 18.1), `pieces: ${r.segments.map(s => s.toFixed(1)).join(', ')}`);
+});
+
+test('speech capture: noise alone is not sent as speech, and a louder room is adapted to', () => {
+  // A minute of hiss that swells, with key presses, then five times louder (a fan comes on).
+  let seed = 3; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const blocks = 90 * RATE / BLOCK, signal = new Float32Array(blocks * BLOCK);
+  let knock = 0;
+  for (let b = 0; b < blocks; b++) {
+    if (rnd() < 0.01) knock = 2;
+    const lvl = (b > blocks * 0.6 ? 0.03 : 0.006) * (1 + 0.25 * Math.sin(b / 40)) * (knock-- > 0 ? 4 : 1);
+    for (let i = 0; i < BLOCK; i++) signal[b * BLOCK + i] = (rnd() * 2 - 1) * lvl * 1.73;
+  }
+  const you = segment(signal, new Uint8Array(blocks), { K: Segmenter.YOU });
+  assert.ok(you.seconds <= 8, `the microphone sent ${you.seconds.toFixed(1)} s of noise`);
+  // Speech after the room got louder is still picked up.
+  const [a] = PHRASES;
+  const tail = scene([{ w: a, level: 0.2, gapBefore: 1 }], 0.03, 9);
+  const both = new Float32Array(signal.length + tail.signal.length); both.set(signal); both.set(tail.signal, signal.length);
+  const speech = new Uint8Array(both.length / BLOCK); speech.set(tail.speech, blocks);
+  assert.ok(segment(both, speech, { K: Segmenter.YOU }).kept >= 0.95);
+});
+
+test('speech capture: what the microphone hears while the other side is talking is not sent', () => {
+  const [a, , c] = PHRASES;
+  // Them: phrase a. The microphone: the same phrase from the speakers (quieter, with room
+  // noise), then, after they stop, the user's own reply.
+  const them = scene([{ w: a, level: 0.08, gapBefore: 1 }, { w: new Float32Array(c.length), level: 1, gapBefore: 1.2 }], 0.001);
+  const mic = scene([{ w: a, level: 0.03, gapBefore: 1.02 }, { w: c, level: 0.06, gapBefore: 1.18 }], 0.004);
+  const themSeg = new Segmenter(() => {}, () => {}, () => {}, { K: Segmenter.THEM });
+  const heard = [];
+  const youSeg = new Segmenter((pcm) => heard.push(pcm.length / RATE), () => {}, () => {}, { K: Segmenter.YOU, masked: () => themSeg.audible() });
+  const n = Math.min(them.signal.length, mic.signal.length) / BLOCK;
+  for (let i = 0; i < n; i++) { themSeg.push(them.signal.subarray(i * BLOCK, (i + 1) * BLOCK)); youSeg.push(mic.signal.subarray(i * BLOCK, (i + 1) * BLOCK)); }
+  youSeg.flush();
+  assert.equal(heard.length, 1, `sent ${heard.map(s => s.toFixed(1)).join(', ')} s`);
+  assert.ok(Math.abs(heard[0] - c.length / RATE) < 1, 'the piece sent is the user\'s own reply');
+  // With headphones (nothing from them in the microphone) the user's speech is sent as before.
+  const alone = [];
+  const solo = new Segmenter((pcm) => alone.push(pcm.length), () => {}, () => {}, { K: Segmenter.YOU, masked: () => themSeg.audible() });
+  const own = scene([{ w: c, level: 0.06, gapBefore: 1 }], 0.004);
+  for (let i = 0; i < own.signal.length / BLOCK; i++) solo.push(own.signal.subarray(i * BLOCK, (i + 1) * BLOCK));
+  solo.flush();
+  assert.equal(alone.length, 1);
+});
+
+test('a long question in many pieces is put together; accented short lines are heard again as English', async () => {
+  const waiting = [], asked = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (messages, { onDelta }) => { asked.push(/They just said: "([^"]*)"/.exec(messages[1].content)[1]); onDelta('ok'); return 'ok'; },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null), debounceMs: 30 });
+  const pieces = ['So I do have one scenario for you.', 'A director comes to you and says attrition spiked this quarter.', 'It went up to fifteen percent in this quarter alone.',
+    'He believes it is because of the pay.', 'He wants you to look at the compensation data.', 'And tell him who to adjust so people do not quit.', 'So how would you approach this request?'];
+  co.setSpeaking('them', true);
+  for (const text of pieces) { const p = co.onSegment('them', Buffer.from('x'), 9000); waiting.shift()(text); await p; }
+  co.setSpeaking('them', false);
+  await new Promise(r => setTimeout(r, 520));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0], pieces.join(' '), 'all seven pieces are the question');
+  assert.equal(languageToForce('Definições.', ''), 'en');
+  assert.equal(languageToForce('I samma rå internen.', ''), 'en');
+  assert.equal(languageToForce('Career opportunities', ''), '');
+});

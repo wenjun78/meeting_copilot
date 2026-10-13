@@ -582,7 +582,11 @@ function wireIpc() {
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
     const r = await dialog.showSaveDialog(win, { defaultPath: `${answers ? 'meeting-with-answers' : 'transcript'}-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
     if (r.canceled || !r.filePath) return null;
-    fs.writeFileSync(r.filePath, text);
+    // How much speech was recorded from each side: if this is far less than was said, the
+    // audio is not reaching the app (volume, device), whatever the words above look like.
+    const span = (ms) => { const s = Math.round(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`; };
+    const side = (who) => { const list = copilot.entries.filter(e => e.who === who && !e.pending); return `${span(list.reduce((n, e) => n + (e.dur || 0), 0))} in ${list.length} ${list.length === 1 ? 'piece' : 'pieces'}`; };
+    fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)\n`);
     return r.filePath;
   });
 
