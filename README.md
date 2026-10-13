@@ -41,7 +41,9 @@ npm start
 ## First run
 
 1. **Settings**: choose the service (OpenAI by default, with `gpt-6.1-sol`
-   for answers and `gpt-4o-transcribe` for speech; Groq is one click away,
+   for answers and `gpt-live-transcribe` for speech (the other side's words
+   appear while they speak; your microphone is transcribed after each pause
+   with `gpt-4o-transcribe`); Groq is one click away,
    and any OpenAI-compatible service works) and paste its API key.
    Fill in "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
@@ -53,12 +55,13 @@ npm start
 
 | | |
 |---|---|
-| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
+| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses; with a live speech model their line fills in while they speak, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
 | Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
+| Recording | Optional (Settings > Audio and screen): the meeting's audio, both sides, kept as a .webm file in Documents/Meeting Copilot Recordings. Tell the other side where the law or the meeting's rules require it |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
 | Answers | Written automatically when they ask a question; one or two sentences to say, then supporting points, with numbered sources you can click |
 | Ask | Type your own question, or "Answer from the screen" for what is being shown, including SQL and code tasks |
-| Window | Drag by the title bar, resize from any edge, minimise, maximise, compact (answer only), adjustable opacity |
+| Window | Light or dark theme. Drag by the title bar, resize from any edge, minimise, maximise, compact (answer only), adjustable opacity |
 
 ## Shortcuts
 
@@ -67,16 +70,18 @@ click on this app during a call.
 
 | Keys | Action |
 |---|---|
-| `Ctrl+Alt+,` | Answer what they said |
-| `Ctrl+Alt+.` | Answer from the screen |
+| `Alt+X` | Answer what they said |
+| `Alt+B` | Answer from the screen |
 | `Ctrl+Alt+/` | Show or hide the window |
 
-The defaults were checked against the published Windows shortcut lists for
-Teams, Zoom, Google Meet and Webex (October 2026): none of them use
-Ctrl+Alt with a punctuation key. Change them under Settings > Shortcuts;
-the field tells you if a combination is already used by one of those apps,
-and the app warns at start-up if another program has taken the keys. (`Cmd`
-replaces `Ctrl` on macOS.)
+The two used during a call are two keys each, both under the left hand, so
+they can be pressed without looking. The defaults were checked against the
+published Windows shortcut lists for Teams, Zoom, Google Meet, Webex, Chrome,
+Edge and Firefox (October 2026): none of them use these. Each is printed on
+its button, and the button the current answer came from is filled. Change
+them under Settings > Shortcuts; the field tells you if a combination is
+already used by one of those apps, and the app warns at start-up if another
+program has taken the keys. (`Cmd` replaces `Ctrl` on macOS.)
 
 ## How "Answer from the screen" works
 
@@ -142,7 +147,15 @@ virus detection. Choose "More info", then "Run anyway".
 | Linux | Choose the "Monitor of ..." PulseAudio/PipeWire device under Settings > Their audio. |
 
 Use headphones. With speakers, your microphone also hears the other side;
-duplicates are filtered, but headphones give a cleaner transcript.
+what it picks up while they are talking is left out, but headphones give a
+cleaner transcript and keep your own words when you both speak at once.
+
+Speech is found by a trained model (Silero VAD, run on your computer), not by
+loudness, so a quiet voice is recorded and hiss, fans and typing are not.
+
+A saved transcript ends with how much speech was recorded from each side. If
+that is far less than was said, the audio is not reaching the app: check the
+system volume and the devices under Settings.
 
 ## What the answers draw on
 
@@ -155,7 +168,7 @@ Everything lives in the **Knowledge** tab, organised by what it is:
 | JD | The job description, agenda or brief for this meeting | Sent with every answer |
 | Instructions | Tone, length, what to stress or avoid | Sent with every answer |
 | Prepared answers | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or dropped as a file (Word, PDF, Markdown or text with numbered questions, questions as headings or in bold, or `Q:` / `A:`; or a CSV with question and answer columns) | Offered with every question, closest first (about 16,000 characters fit, roughly 30 answers); when the question asked is the same or similar, the reply is built on your answer |
-| Questions to ask | The questions you want to ask them, one per line | Sent with every answer; when they invite your questions, two or three that fit the conversation are suggested, leaving out any already answered |
+| Questions to ask | The questions you want to ask them, one per line | Sent with every answer; when they invite your questions, the whole list is shown less any the conversation already answered, with one or two more that follow from what they said |
 | Publications | Your papers: add the PDF or Word file; type how you sum each one up | Searched section by section (methods, results, limitations); each paper's title and abstract, and what you typed, sent with every answer |
 | Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
 | Equipped | Nothing to fill in: it shows what the above adds up to | |
@@ -259,7 +272,7 @@ src/ocr.js         Tesseract screen reading
 src/question.js    is this a question?
 src/shortcuts.js   shortcut defaults and the meeting-app conflict table
 src/rag/           chunking, BM25, GitHub / URL / folder ingestion, index
-renderer/          the window: capture.js (audio, screen), app.js (UI)
+renderer/          the window: capture.js (audio, screen), vad.js (finding speech), app.js (UI)
 ```
 
 ## License

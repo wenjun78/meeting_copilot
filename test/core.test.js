@@ -203,7 +203,8 @@ test('config store encrypts secrets at rest and keeps free-form extra params', (
   assert.equal(b.llm.apiKey, 'gsk_secret');
   assert.deepEqual(b.llm.extra, {});
   assert.equal(b.github.apiBase, 'https://ghe.example/api/v3');
-  assert.equal(b.stt.model, 'gpt-4o-transcribe');
+  assert.equal(b.stt.model, 'gpt-live-transcribe');
+  assert.equal(b.stt.batchModel, 'gpt-4o-transcribe');
   assert.equal(b.llm.baseUrl, 'https://api.openai.com/v1');
   assert.equal(b.llm.model, 'gpt-6.1-sol');
 
@@ -267,7 +268,7 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   assert.match(co.transcriptText(), /Them: How do you handle/);
   // The saved log has what was said and each answer suggested, in the order they happened.
   const saved = co.transcriptText();
-  assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer:\n {4}\S/);
+  assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer \(first words \d+\.\d s after they stopped\):\n {4}\S/);
   assert.match(saved, /Suggested answer \(you asked: What threshold do we use\?\):\n {4}[\s\S]*?0\.92/);
   assert.match(saved, /Suggested answer \(from the screen\):/);
   // Without the answers it is the transcript alone.
@@ -414,6 +415,17 @@ test('a stalled answer stream is abandoned', async () => {
 test('default shortcuts do not collide with Teams, Zoom, Meet or Webex; known clashes are named', () => {
   for (const accel of Object.values(shortcuts.DEFAULTS)) assert.equal(shortcuts.problem(accel), '', accel);
   assert.equal(new Set(Object.values(shortcuts.DEFAULTS)).size, 3);
+  // The two pressed during a call are two keys each, bound by no meeting app or browser.
+  assert.deepEqual([shortcuts.DEFAULTS.answer, shortcuts.DEFAULTS.screen], ['Alt+X', 'Alt+B']);
+  assert.match(shortcuts.problem('Ctrl+J'), /Chrome, Edge or Firefox/);
+  assert.match(shortcuts.problem('Alt+D'), /Chrome, Edge or Firefox/);
+  // Settings still holding the old defaults move to the new ones; a combination the user chose stays.
+  {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'keys-')), 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ defaults: 2, shortcuts: { answer: 'CommandOrControl+Alt+,', screen: 'CommandOrControl+Shift+9', toggle: 'CommandOrControl+Alt+/' } }));
+    const got = new ConfigStore(file).load().shortcuts;
+    assert.deepEqual(got, { answer: 'Alt+X', screen: 'CommandOrControl+Shift+9', toggle: 'CommandOrControl+Alt+/' });
+  }
   assert.match(shortcuts.problem('CommandOrControl+Shift+Space'), /Microsoft Teams/);   // Teams: go to sharing toolbar
   assert.match(shortcuts.problem('CommandOrControl+Shift+Enter'), /Microsoft Teams/);   // Teams: reset pane width
   assert.match(shortcuts.problem('Alt+A'), /Zoom/);                                      // Zoom: mute
@@ -1054,7 +1066,8 @@ test('Questions to ask: sent with every answer, with the rule for when they are 
   const co = new Copilot({ getConfig, llm: new LLM(getConfig), kb, debounceMs: 20 });
   const [system, user] = co._buildMessages({ asked: 'Do you have any questions for us?', mode: 'auto', refs: [], cfg: getConfig() });
   assert.match(user.content, /### Instructions for this meeting\nKeep it short\.\n\n### Questions I want to ask the other side\nWhat does success look like/);
-  assert.match(system.content, /When the other side invites questions[^\n]*two or three of those questions as bullets[^\n]*leave out any the conversation has already answered[^\n]*Never answer these questions yourself/);
+  // The whole list is offered, less what the conversation already answered, plus follow-ups from what was said.
+  assert.match(system.content, /When the other side invites questions[^\n]*every one of those questions that the conversation has not already answered[^\n]*limits on bullets and words do not apply[^\n]*"Skipped:"[^\n]*"Also worth asking:"[^\n]*Never answer these questions yourself/);
   const { detectQuestion } = require('../src/question');
   assert.ok(detectQuestion('Okay, that is all from my side. Do you have any questions for us?').ask);
 });
@@ -1107,4 +1120,306 @@ test('an answer is not started over for a few trailing words, and waits longer w
   await say('你怎么处理重复的客户记录');
   await wait(70);
   assert.deepEqual(lines, ['你怎么处理重复的客户记录']);
+});
+
+// ---- speech capture ------------------------------------------------------------------
+// The detector and segmenter run in the window; here they are loaded on their own, with the
+// same model, and fed real (synthesized) speech: phrases of a question at different
+// loudness, with pauses, over several kinds of background.
+require('../renderer/vad.js'); // outside a window it puts itself on globalThis
+const { VAD } = globalThis;
+const BLOCK = 512, RATE = 16000;
+let modelOnce;
+const speechModel = () => (modelOnce = modelOnce || (async () => {
+  const ort = require('onnxruntime-web');
+  ort.env.wasm.numThreads = 1;
+  return VAD.loadSpeechModel(ort, fs.readFileSync(path.join(__dirname, '..', 'renderer', 'vad', 'silero_vad_v5.onnx')));
+})());
+const THEM = { start: 0.4, stay: 0.3, pause: 17 }, YOU = { start: 0.5, stay: 0.35, pause: 22 }; // as set in capture.js
+const phrase = (name) => { // 16 kHz mu-law -> samples in -1..1
+  const b = fs.readFileSync(path.join(__dirname, 'fixtures', `phrase-${name}.ulaw`)), out = new Float32Array(b.length);
+  for (let i = 0; i < b.length; i++) { const u = ~b[i] & 0xff, t = (((u & 0x0f) << 3) + 0x84) << ((u & 0x70) >> 4); out[i] = ((u & 0x80) ? (0x84 - t) : (t - 0x84)) / 32768; }
+  return out;
+};
+const PHRASES = ['a', 'b', 'c'].map(phrase);
+const speechLevel = (w) => { let x = 0, n = 0; for (const v of w) if (Math.abs(v) > 0.01) { x += v * v; n++; } return Math.sqrt(x / n); };
+// parts: [{ w, level, gapBefore (s) }]; background(blockIndex, rnd) -> noise level.
+// -> { signal, speech: 1 per block that holds speech, lastSpeech: index of the last such block }
+function scene(parts, background = () => 0.001, { seed = 5, tail = 2.5 } = {}) {
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  let pos = 0; const at = [];
+  for (const p of parts) { pos += Math.round(p.gapBefore * RATE); at.push(pos); pos += p.w.length; }
+  const total = Math.ceil((pos + RATE * tail) / BLOCK) * BLOCK;
+  const signal = new Float32Array(total), clean = new Float32Array(total);
+  parts.forEach((p, k) => { const g = p.level / speechLevel(p.w); for (let i = 0; i < p.w.length; i++) { signal[at[k] + i] += p.w[i] * g; clean[at[k] + i] = p.w[i]; } });
+  const speech = new Uint8Array(total / BLOCK); let lastSpeech = -1;
+  for (let b = 0; b < speech.length; b++) {
+    const lvl = background(b, rnd); let e = 0;
+    for (let i = 0; i < BLOCK; i++) { signal[b * BLOCK + i] += (rnd() * 2 - 1) * lvl * 1.73; e += clean[b * BLOCK + i] ** 2; }
+    if (Math.sqrt(e / BLOCK) > 0.01) { speech[b] = 1; lastSpeech = b; }
+  }
+  return { signal, speech, lastSpeech };
+}
+// Runs a signal through the segmenter.
+// -> { kept: share of speech blocks inside emitted pieces, pieces: [seconds], seconds, pauseAfter: seconds from the last word to "stopped speaking" }
+async function hear(sc, opts = THEM, extra = {}) {
+  const model = await speechModel();
+  const got = new Uint8Array(sc.speech.length), pieces = [];
+  let idx = 0, covered = 0, stoppedAt = -1;
+  const seg = new VAD.Segmenter({
+    detect: model.stream(), ...opts, ...extra,
+    onUtterance: (pcm) => { pieces.push(pcm.length / RATE); for (let i = Math.max(0, idx + 1 - covered); i <= idx; i++) got[i] = 1; },
+    onSpeaking: (on) => { if (!on && idx >= sc.lastSpeech && stoppedAt < 0) stoppedAt = idx; },
+  });
+  const finish = seg._finish.bind(seg);
+  seg._finish = (...a) => { covered = seg.cur ? seg.cur.blocks.length : 0; return finish(...a); };
+  for (idx = 0; idx < sc.speech.length; idx++) await seg.push(sc.signal.subarray(idx * BLOCK, (idx + 1) * BLOCK));
+  const stillSpeaking = !!seg.cur;
+  idx = sc.speech.length - 1;
+  await seg.flush();
+  let all = 0, kept = 0;
+  for (let b = 0; b < sc.speech.length; b++) if (sc.speech[b]) { all++; if (got[b]) kept++; }
+  return { kept: all ? kept / all : 1, pieces, seconds: pieces.reduce((a, b) => a + b, 0), pauseAfter: stillSpeaking || stoppedAt < 0 ? Infinity : (stoppedAt - sc.lastSpeech) * BLOCK / RATE };
+}
+const BACKGROUNDS = {
+  'a clean line': () => 0.0005,
+  'steady hiss': () => 0.004,
+  'hiss with dropouts': (b, rnd) => (rnd() < 0.04 ? 0 : 0.004),
+  'hiss that cuts out every two seconds': (b) => (b % 62 < 9 ? 0 : 0.006),
+  'room tone that swells': (b) => 0.0055 + 0.0025 * Math.sin(b / 25),
+  'typing': (b) => (Math.floor(b / 2) % 15 === 0 ? 0.02 : 0.002),
+};
+
+test('speech capture: a question spoken in pieces, loud then quiet, is recorded whole', async () => {
+  const [a, b, c] = PHRASES;
+  // The first detector went by loudness: after a loud phrase it took quieter words for
+  // silence, so "some highlights of your career progress" was heard and the rest was not.
+  for (const [label, noise, levels] of [
+    ['normal', 0.001, [0.08, 0.08, 0.08]],
+    ['quiet after loud', 0.003, [0.09, 0.02, 0.03]],
+    ['low system volume', 0.0015, [0.012, 0.006, 0.01]],
+    ['barely audible', 0.0004, [0.004, 0.002, 0.003]],
+    ['noisy line', 0.008, [0.06, 0.03, 0.05]],
+  ]) {
+    const r = await hear(scene([{ w: a, level: levels[0], gapBefore: 1.5 }, { w: b, level: levels[1], gapBefore: 0.45 }, { w: c, level: levels[2], gapBefore: 1.1 }], () => noise));
+    assert.ok(r.kept >= 0.97, `${label}: ${(r.kept * 100).toFixed(0)}% of the speech was recorded`);
+    assert.ok(r.pieces.length >= 1 && r.pieces.length <= 4, `${label}: ${r.pieces.length} pieces`);
+  }
+});
+
+test('speech capture: a long turn is cut into pieces without a gap between them', async () => {
+  const [a, b, c] = PHRASES;
+  // About half a minute of speech with no real pause: breaths of 0.1 to 0.3 s only.
+  const parts = [];
+  for (let i = 0; i < 9; i++) parts.push({ w: [a, b, c][i % 3], level: 0.05, gapBefore: i ? 0.1 + (i % 3) * 0.1 : 1 });
+  const r = await hear(scene(parts, () => 0.002));
+  assert.ok(r.kept >= 0.995, `${(r.kept * 100).toFixed(1)}% recorded`);
+  assert.ok(r.pieces.length >= 2 && r.pieces.every(s => s <= 18.1), `pieces: ${r.pieces.map(s => s.toFixed(1)).join(', ')}`);
+});
+
+test('speech capture: background noise is not recorded, and the end of a question is noticed at once whatever the background', async () => {
+  const [a] = PHRASES;
+  for (const [name, background] of Object.entries(BACKGROUNDS)) {
+    // Twenty seconds of the background alone: nothing is sent for transcription, from either side.
+    const quiet = { signal: scene([], background, { tail: 20 }).signal, speech: new Uint8Array(Math.floor(20 * RATE / BLOCK)), lastSpeech: -1 };
+    for (const side of [THEM, YOU]) assert.equal((await hear(quiet, side)).seconds, 0, `${name}: background recorded as speech`);
+    // A question over that background, normal and quiet: all of it is recorded, and "they
+    // have stopped" comes within a second of the last word, so the answer can start. (A
+    // detector that takes the background for a voice never reports the pause.)
+    for (const level of [0.06, 0.015]) {
+      const r = await hear(scene([{ w: a, level, gapBefore: 3 }], background, { tail: 6 }));
+      assert.ok(r.kept >= 0.95, `${name}, level ${level}: ${(r.kept * 100).toFixed(0)}% recorded`);
+      assert.ok(r.pauseAfter <= 1.0, `${name}, level ${level}: pause noticed after ${r.pauseAfter} s`);
+      assert.ok(r.seconds <= a.length / RATE + 1.2, `${name}, level ${level}: ${r.seconds.toFixed(1)} s recorded for ${(a.length / RATE).toFixed(1)} s of speech`);
+    }
+  }
+});
+
+test('speech capture: what the microphone hears while the other side is talking is not sent', async () => {
+  const [a, , c] = PHRASES;
+  const model = await speechModel();
+  // Them: phrase a. The microphone: the same phrase from the speakers (quieter, with room
+  // noise), then, after they stop, the user's own reply.
+  const them = scene([{ w: a, level: 0.08, gapBefore: 1 }, { w: new Float32Array(c.length), level: 1, gapBefore: 1.2 }], () => 0.001);
+  const mic = scene([{ w: a, level: 0.03, gapBefore: 1.02 }, { w: c, level: 0.06, gapBefore: 1.18 }], () => 0.004);
+  const themSeg = new VAD.Segmenter({ detect: model.stream(), ...THEM, onUtterance: () => {} });
+  const heard = [];
+  const youSeg = new VAD.Segmenter({ detect: model.stream(), ...YOU, masked: () => themSeg.audible(), onUtterance: (pcm) => heard.push(pcm.length / RATE) });
+  const n = Math.min(them.signal.length, mic.signal.length) / BLOCK;
+  for (let i = 0; i < n; i++) { await themSeg.push(them.signal.subarray(i * BLOCK, (i + 1) * BLOCK)); await youSeg.push(mic.signal.subarray(i * BLOCK, (i + 1) * BLOCK)); }
+  await youSeg.flush();
+  assert.equal(heard.length, 1, `sent ${heard.map(s => s.toFixed(1)).join(', ')} s`);
+  assert.ok(Math.abs(heard[0] - c.length / RATE) < 1, 'the piece sent is the user\'s own reply');
+  // With headphones (nothing from them in the microphone) the user's speech is sent as before.
+  const own = await hear(scene([{ w: c, level: 0.06, gapBefore: 1 }], () => 0.004), YOU, { masked: () => themSeg.audible() });
+  assert.equal(own.pieces.length, 1);
+});
+
+test('speech capture: if the model fails, detection carries on by loudness and says so', async () => {
+  const [a] = PHRASES;
+  const sc = scene([{ w: a, level: 0.06, gapBefore: 1.5 }], () => 0.002);
+  const problems = [], pieces = [];
+  let calls = 0;
+  const seg = new VAD.Segmenter({ detect: async () => { if (++calls > 5) throw new Error('model gone'); return 0; }, onUtterance: (pcm) => pieces.push(pcm.length / RATE), onProblem: (e) => problems.push(e.message) });
+  for (let i = 0; i < sc.speech.length; i++) await seg.push(sc.signal.subarray(i * BLOCK, (i + 1) * BLOCK));
+  await seg.flush();
+  assert.deepEqual(problems, ['model gone']);
+  assert.equal(pieces.length, 1);
+  assert.ok(Math.abs(pieces[0] - a.length / RATE) < 1.2, `${pieces[0].toFixed(1)} s recorded by loudness`);
+});
+
+test('a long question in many pieces is put together; accented short lines are heard again as English', async () => {
+  const waiting = [], asked = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (messages, { onDelta }) => { asked.push(/They just said: "([^"]*)"/.exec(messages[1].content)[1]); onDelta('ok'); return 'ok'; },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null), debounceMs: 30 });
+  const pieces = ['So I do have one scenario for you.', 'A director comes to you and says attrition spiked this quarter.', 'It went up to fifteen percent in this quarter alone.',
+    'He believes it is because of the pay.', 'He wants you to look at the compensation data.', 'And tell him who to adjust so people do not quit.', 'So how would you approach this request?'];
+  co.setSpeaking('them', true);
+  for (const text of pieces) { const p = co.onSegment('them', Buffer.from('x'), 9000); waiting.shift()(text); await p; }
+  co.setSpeaking('them', false);
+  await new Promise(r => setTimeout(r, 520));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0], pieces.join(' '), 'all seven pieces are the question');
+  assert.equal(languageToForce('Definições.', ''), 'en');
+  assert.equal(languageToForce('I samma rå internen.', ''), 'en');
+  assert.equal(languageToForce('Career opportunities', ''), '');
+});
+
+test('answers start promptly after a finished question, and the saved log says where the time went', async () => {
+  const waiting = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (_m, { onDelta }) => { await new Promise(r => setTimeout(r, 30)); onDelta('I use two passes.'); return 'I use two passes.'; },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  // Defaults: a quarter of a second after the transcript of a finished question, longer when it trails off.
+  const real = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null) });
+  assert.equal(real.debounceMs, 250);
+  assert.equal(real.trailMs, 900);
+
+  const co = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null), debounceMs: 20 });
+  const done = new Promise(r => co.on('answer', e => e.type === 'done' && r()));
+  const p = co.onSegment('them', Buffer.from('x'), 4000, 550); // cut after 0.55 s of silence
+  await new Promise(r => setTimeout(r, 40)); // transcription takes a moment
+  waiting.shift()('How do you handle duplicate customer records?');
+  await p; await done;
+  const { timing } = co.history[0];
+  assert.ok(timing.heard >= 585 && timing.heard < 950, `silence and transcription: ${timing.heard} ms`);
+  assert.ok(timing.wait >= 15 && timing.wait < 200, `waiting: ${timing.wait} ms`);
+  assert.ok(timing.first >= 25 && timing.first < 300, `to the first words: ${timing.first} ms`);
+  assert.match(co.transcriptText(), /Suggested answer \(first words 0\.[6-9] s after they stopped\):/);
+  // A typed question has no "they stopped" to measure from.
+  await co.answer({ mode: 'typed', question: 'And the threshold?' });
+  assert.ok(!co.history[1].timing);
+
+  // Prepared answers ranked by meaning: fewer are sent, so the request is shorter.
+  const many = Array.from({ length: 40 }, (_, i) => ({ q: `Question number ${i} about topic ${i}?`, a: 'x'.repeat(600), score: 1 - i / 40, match: i === 0 }));
+  const count = (list) => (co._buildMessages({ asked: 'q', mode: 'typed', refs: [], prepared: list, cfg })[1].content.match(/^Q: /gm) || []).length;
+  const byWording = count(many), byMeaning = count(many.map(x => ({ ...x, byMeaning: true })));
+  assert.ok(byWording >= 24 && byMeaning >= 12 && byMeaning < byWording * 0.65, `${byWording} by wording, ${byMeaning} by meaning`);
+});
+
+test('live transcription: words arrive while they speak, the final text at the pause, and a recording is the fallback', async () => {
+  const { LiveTranscriber, liveUrl, isLiveModel, keywordsFrom, to24k } = require('../src/live');
+  assert.equal(liveUrl('https://api.openai.com/v1/'), 'wss://api.openai.com/v1/realtime?intent=transcription');
+  assert.ok(isLiveModel('gpt-live-transcribe') && !isLiveModel('gpt-4o-transcribe') && !isLiveModel('whisper-large-v3'));
+  assert.deepEqual(keywordsFrom('CPM, Databricks; Wen Jun\n<script>, ' + 'x'.repeat(80)), ['CPM', 'Databricks', 'Wen Jun', 'script']);
+  // 16 kHz -> 24 kHz: three samples for every two, 16-bit.
+  const up = to24k(Float32Array.from([0, 0.5, 1, 0.5]));
+  assert.equal(up.length, 12);
+  assert.ok(up.readInt16LE(0) === 0 && up.readInt16LE(6) === 32767 && up.readInt16LE(2) > 0 && up.readInt16LE(2) < up.readInt16LE(4));
+
+  const audio = (seconds) => new Float32Array(Math.round(16000 * seconds)).fill(0.1);
+  const open = async (live, extra = {}) => {
+    const s = await mock.start({ live });
+    const t = new LiveTranscriber({ url: liveUrl(s.base + '/v1'), apiKey: 'test-key', model: 'gpt-live-transcribe', languages: ['en', 'zh'], keywords: ['CPM'], prompt: 'A meeting.', finalMs: 300, ...extra });
+    return { s, t };
+  };
+
+  // The session is opened with the model, both languages and the keywords, and no turn detection.
+  let { s, t } = await open({ lines: ['How do you handle duplicate customer records?', 'And at ten times the volume?'] });
+  await t.connect();
+  assert.deepEqual(s.log.live.sessions[0], { type: 'transcription', audio: { input: { format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: 'gpt-live-transcribe', delay: 'low', languages: ['en', 'zh'], keywords: ['CPM'], prompt: 'A meeting.' }, turn_detection: null } } });
+  assert.deepEqual(s.log.live.auth, ['Bearer test-key']);
+
+  // While audio is sent the words so far come back; at the commit, the whole sentence.
+  const partials = [];
+  t.on('partial', (text) => partials.push(text));
+  t.begin();
+  for (let i = 0; i < 10; i++) t.append(audio(0.1));
+  await new Promise(r => setTimeout(r, 60));
+  assert.ok(partials.length >= 3 && /^How do you/.test(partials.at(-1)), partials.join(' | '));
+  assert.equal(await t.commit(), 'How do you handle duplicate customer records?');
+  assert.equal(s.log.live.appended[0], 16000 * 1.5 * 2, '1 s at 16 kHz went out as 24 kHz 16-bit');
+  // The next utterance is its own item; a discarded one is cleared and gives no text.
+  t.begin(); t.append(audio(0.3)); t.discard();
+  t.begin(); t.append(audio(0.5));
+  assert.equal(await t.commit(), 'And at ten times the volume?');
+  assert.equal(s.log.live.clears, 1);
+  await assert.rejects(() => { t.begin(); return t.commit(); }, /Nothing was streamed/);
+  t.close(); await s.close();
+
+  // Refused settings, a wrong key and a silent service each give a reason instead of hanging.
+  ({ s, t } = await open({ refuse: 'Model gpt-live-transcribe is not available on your plan.' }));
+  await assert.rejects(t.connect(), /not available on your plan/);
+  t.close(); await s.close();
+  ({ s, t } = await open({}, { apiKey: 'wrong' }));
+  await assert.rejects(t.connect(), /API key was rejected/);
+  await s.close();
+  ({ s, t } = await open({ silent: true }));
+  await t.connect();
+  t.begin(); t.append(audio(0.5));
+  await assert.rejects(t.commit(), /did not arrive in time/);
+  t.close(); await s.close();
+  // A dropped connection fails what was waiting and can be opened again.
+  ({ s, t } = await open({ closeAfter: 1, lines: ['One.', 'Two.'] }));
+  await t.connect();
+  t.begin(); t.append(audio(0.5));
+  assert.equal(await t.commit(), 'One.');
+  await new Promise(r => t.once('closed', r));
+  assert.ok(!t.open);
+  await t.connect(); // a new session
+  t.begin(); t.append(audio(0.5));
+  assert.equal(await t.commit(), 'One.');
+  t.close(); await s.close();
+
+  // In the meeting: the line shows at once, fills in while they speak, and is final at the pause.
+  const events = [];
+  const co = new Copilot({ getConfig: cfgFor(), llm: { transcribe: async () => 'from the recording', chatStream: async () => 'ok', embedConfigured: () => false }, kb: new KnowledgeBase(null), debounceMs: 20 });
+  co.on('transcript', e => events.push([e.type, e.entry.pending, e.entry.text]));
+  const entry = co.openUtterance('them');
+  co.partialUtterance(entry, 'We shipped');
+  co.partialUtterance(entry, 'We shipped the release');
+  await co.finishUtterance(entry, async () => 'We shipped the release last week.', 2000, 550);
+  assert.deepEqual(events, [['add', true, ''], ['update', true, 'We shipped'], ['update', true, 'We shipped the release'], ['update', false, 'We shipped the release last week.']]);
+  // When the live text fails, the caller's fallback (the recording) supplies it; a cancelled utterance leaves no line.
+  const second = co.openUtterance('them');
+  await co.finishUtterance(second, async () => { try { throw new Error('late'); } catch { return 'from the recording'; } }, 1000, 550);
+  assert.equal(co.entries.at(-1).text, 'from the recording');
+  const third = co.openUtterance('them');
+  co.cancelUtterance(third);
+  assert.equal(co.entries.length, 2);
+  assert.equal(co.pendingThem, 0);
+
+  // A live model is never sent a recording: recordings go to the model for recordings.
+  const s3 = await mock.start({ sttLines: ['My own words.'] });
+  const llm = new LLM(() => ({ llm: { baseUrl: s3.base + '/v1', apiKey: 'test-key', model: 'm' }, stt: { baseUrl: '', apiKey: '', model: 'gpt-live-transcribe', batchModel: 'gpt-4o-transcribe', language: 'en', vocabulary: '' } }));
+  assert.equal(await llm.transcribe(Buffer.from('RIFF....WAVEfmt ')), 'My own words.');
+  assert.equal(s3.log.stt.at(-1).model, 'gpt-4o-transcribe');
+  await s3.close();
+
+  // Saved settings on the earlier default model move to live transcription, on OpenAI only.
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'live-')), 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ defaults: 2, stt: { model: 'gpt-4o-transcribe' } }));
+  assert.equal(new ConfigStore(file).load().stt.model, 'gpt-live-transcribe');
+  fs.writeFileSync(file, JSON.stringify({ defaults: 2, llm: { baseUrl: 'https://api.groq.com/openai/v1' }, stt: { model: 'whisper-large-v3' } }));
+  assert.equal(new ConfigStore(file).load().stt.model, 'whisper-large-v3');
+  fs.writeFileSync(file, JSON.stringify({ defaults: 3, stt: { model: 'gpt-4o-transcribe' } }));
+  assert.equal(new ConfigStore(file).load().stt.model, 'gpt-4o-transcribe', 'chosen after the change: kept');
 });

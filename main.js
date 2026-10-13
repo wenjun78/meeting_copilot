@@ -2,7 +2,7 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut, screen, dialog, shell, safeStorage, net, systemPreferences, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { fileURLToPath } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const { ConfigStore } = require('./src/config');
 const { LLM } = require('./src/llm');
 const { Copilot } = require('./src/copilot');
@@ -16,6 +16,8 @@ const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
 const { QA_FILE, normalizePairs, parseQA, parseQATable } = require('./src/qa');
+const { LiveTranscriber, liveUrl, isLiveModel, keywordsFrom } = require('./src/live');
+const { cleanTranscript, languageToForce, speechLanguage } = require('./src/llm');
 const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -44,7 +46,7 @@ function createWindow() {
     ? saved : { width: 440, height: Math.min(680, area.height - 80), x: area.x + area.width - 460, y: area.y + 40 };
   win = new BrowserWindow({
     ...bounds, minWidth: 360, minHeight: 150,
-    frame: false, show: false, backgroundColor: '#1B2530', title: 'Meeting Copilot',
+    frame: false, show: false, backgroundColor: config.get().ui.theme === 'light' ? '#F3F5F7' : '#1B2530', title: 'Meeting Copilot',
     alwaysOnTop: true, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
@@ -107,6 +109,54 @@ function publicConfig() {
   const labels = Object.fromEntries(Object.entries(c.shortcuts).map(([k, v]) => [k, shortcuts.pretty(v)]));
   return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable(), version: app.getVersion(), updates: updater.supported };
 }
+
+// ---- live transcription of the other side ---------------------------------------
+// With a live speech model their words are streamed while they speak: the text appears as
+// it is said and is final the moment they pause. Every utterance is also kept as a
+// recording, so when the live session cannot be used, or gives nothing for an utterance,
+// that recording is transcribed the ordinary way and nothing is lost.
+let live = null;      // the open session, while listening
+let liveTurn = null;  // the utterance being streamed: { entry }
+let liveMisses = 0;   // utterances in a row the live session gave nothing for
+let liveNote = '';    // the reason already shown, so it is said once
+
+function liveSettings() {
+  const cfg = config.get(), stt = cfg.stt;
+  if (!isLiveModel(stt.model)) return null;
+  const base = stt.baseUrl || cfg.llm.baseUrl, key = stt.baseUrl ? stt.apiKey : (stt.apiKey || cfg.llm.apiKey);
+  if (!base || !key) return null;
+  const mode = speechLanguage(stt.language);
+  return { url: liveUrl(base), apiKey: key, model: stt.model, delay: stt.delay || 'low', languages: mode === 'en+zh' ? ['en', 'zh'] : [mode],
+    keywords: keywordsFrom(stt.vocabulary), prompt: 'A live video meeting, often a job interview.' };
+}
+function liveUnavailable(reason) {
+  if (liveNote === reason) return;
+  liveNote = reason;
+  send('notice', { level: 'error', message: `Live transcription is not available: ${reason} Their speech is transcribed after each pause instead, with ${config.get().stt.batchModel || 'gpt-4o-transcribe'}.` });
+}
+function liveStop() { if (live) live.close(); live = null; liveTurn = null; }
+// -> true when their speech will be streamed
+async function liveStart() {
+  liveStop(); liveMisses = 0;
+  const settings = liveSettings();
+  if (!settings) return false;
+  const session = new LiveTranscriber(settings);
+  session.on('partial', (text) => { if (live === session && liveTurn) copilot.partialUtterance(liveTurn.entry, text); });
+  session.on('closed', () => { if (live === session) { live = null; } });
+  try { await session.connect(); } catch (e) { liveUnavailable(/[.!?]$/.test(e.message) ? e.message : e.message + '.'); return false; }
+  live = session; liveNote = '';
+  return true;
+}
+// The recording of an utterance, transcribed the ordinary way.
+const transcribeRecording = (wav) => {
+  const vocab = (config.get().stt.vocabulary || '').trim();
+  return llm.transcribe(Buffer.from(wav), { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(25000) });
+};
+
+// ---- recordings ---------------------------------------------------------------
+// Kept where the user will find them: Documents/Meeting Copilot Recordings.
+const recordingsDir = () => (process.env.MC_USER_DATA ? path.join(app.getPath('userData'), 'recordings') : path.join(app.getPath('documents'), 'Meeting Copilot Recordings'));
+let recording = ''; // the file being written, while a meeting is recorded
 
 // ---- knowledge sources ------------------------------------------------------
 
@@ -505,6 +555,22 @@ function wireIpc() {
     const text = kb.fileText(String(sourceId), String(filePath));
     return { text: text.slice(0, 8000), more: Math.max(0, text.length - 8000) };
   });
+  // Recording: the window hands over encoded audio every few seconds; it is appended to a
+  // file made at the first piece. The file is complete at every moment, so a crash keeps
+  // what was recorded up to then.
+  handle('rec:chunk', (bytes) => {
+    if (!recording) {
+      const dir = recordingsDir();
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
+      recording = path.join(dir, `Meeting ${stamp}.webm`);
+      for (let n = 2; fs.existsSync(recording); n++) recording = path.join(dir, `Meeting ${stamp} (${n}).webm`);
+    }
+    fs.appendFileSync(recording, Buffer.from(bytes));
+    return true;
+  });
+  handle('rec:stop', () => { const file = recording; recording = ''; return file || null; });
+  handle('rec:openFolder', () => { const dir = recordingsDir(); fs.mkdirSync(dir, { recursive: true }); shell.openPath(dir); return dir; });
   handle('kb:openFolder', (id) => {
     const src = kb.sources[id];
     if (src && src.origin && src.origin.kind === 'folder') shell.openPath(src.origin.spec);
@@ -554,9 +620,54 @@ function wireIpc() {
     return r.x + r.w <= 0 || r.y + r.h <= 0 || r.x >= 1 || r.y >= 1 ? null : r;
   });
 
-  handle('stt:segment', (who, wav, durationMs) => {
+  // The speech model and its runtime, read here so the window fetches nothing.
+  handle('vad:assets', () => {
+    const dist = path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist');
+    const bytes = (file) => { const b = fs.readFileSync(file); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+    return { model: bytes(path.join(__dirname, 'renderer', 'vad', 'silero_vad_v5.onnx')), wasm: bytes(path.join(dist, 'ort-wasm-simd-threaded.wasm')), runtimeDir: pathToFileURL(dist + path.sep).href };
+  });
+  // Asked when listening starts: is their speech going to be streamed?
+  handle('stt:live', () => liveStart());
+  // A piece of their speech while it is being spoken (16 kHz samples). first: an utterance begins.
+  handle('stt:audio', (who, samples, first) => {
+    if (who !== 'them' || !live) return false;
+    if (first) {
+      if (liveTurn) { live.discard(); copilot.cancelUtterance(liveTurn.entry); liveTurn = null; } // the one before never ended
+      if (!live.open) { liveStart(); return false; } // the connection dropped: this utterance goes by its recording
+      liveTurn = { entry: copilot.openUtterance('them') };
+      live.begin();
+    }
+    if (liveTurn) live.append(new Float32Array(samples));
+    return !!liveTurn;
+  });
+  // Their utterance turned out not to be speech worth keeping.
+  handle('stt:discard', (who) => {
+    if (who !== 'them' || !liveTurn) return false;
+    if (live) live.discard();
+    copilot.cancelUtterance(liveTurn.entry); liveTurn = null;
+    return true;
+  });
+  handle('stt:segment', (who, wav, durationMs, quietMs) => {
     if (who !== 'them' && who !== 'you') return false;
-    copilot.onSegment(who, Buffer.from(wav), Number(durationMs) || 0); // result arrives as 'transcript' events
+    if (who === 'them' && liveTurn && live) {
+      // The streamed utterance ended: its final text comes from the live session. If that
+      // gives nothing in time, or text in another language, the recording is transcribed instead.
+      const turn = liveTurn, session = live; liveTurn = null;
+      const bothLanguages = speechLanguage(config.get().stt.language) === 'en+zh';
+      copilot.finishUtterance(turn.entry, async () => {
+        try {
+          const text = cleanTranscript({ text: await session.commit() });
+          if (text && !(bothLanguages && languageToForce(text, ''))) { liveMisses = 0; return text; }
+        } catch (e) {
+          if (++liveMisses >= 2 && live === session) { liveStop(); liveUnavailable(/[.!?]$/.test(e.message) ? e.message : e.message + '.'); }
+        } finally {
+          if (live === session && session.stale) liveStart(); // renewed between utterances, before the session's time limit
+        }
+        return transcribeRecording(wav);
+      }, Number(durationMs) || 0, Number(quietMs) || 0);
+      return true;
+    }
+    copilot.onSegment(who, Buffer.from(wav), Number(durationMs) || 0, Number(quietMs) || 0); // result arrives as 'transcript' events
     return true;
   });
   handle('stt:speaking', (who, on) => { copilot.setSpeaking(who, !!on); return true; });
@@ -573,6 +684,7 @@ function wireIpc() {
     meetingOn = !!on;
     if (starting) autoSync({ force: true }).catch(() => {}); // not awaited: listening starts immediately
     if (!on) downloadUpdate(); // an update found during the meeting is fetched once it ends
+    if (!on) liveStop();
     return true;
   });
   handle('meeting:reset', () => { copilot.reset(); return true; });
@@ -582,7 +694,15 @@ function wireIpc() {
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
     const r = await dialog.showSaveDialog(win, { defaultPath: `${answers ? 'meeting-with-answers' : 'transcript'}-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
     if (r.canceled || !r.filePath) return null;
-    fs.writeFileSync(r.filePath, text);
+    // How much speech was recorded from each side: if this is far less than was said, the
+    // audio is not reaching the app (volume, device), whatever the words above look like.
+    const span = (ms) => { const s = Math.round(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`; };
+    const side = (who) => { const list = copilot.entries.filter(e => e.who === who && !e.pending); return `${span(list.reduce((n, e) => n + (e.dur || 0), 0))} in ${list.length} ${list.length === 1 ? 'piece' : 'pieces'}`; };
+    // And, with the answers, how long they took to appear and where that time went.
+    const timed = copilot.history.map(h => h.timing).filter(Boolean);
+    const mean = (pick) => (timed.reduce((n, t) => n + pick(t), 0) / timed.length / 1000).toFixed(1);
+    const speed = answers && timed.length ? `\n(Answers began ${mean(t => t.heard + t.wait + t.first)} s after they stopped speaking, on average over ${timed.length}: ${mean(t => t.heard)} s to notice the pause and transcribe, ${mean(t => t.wait)} s waiting in case they carried on, ${mean(t => t.first)} s for search and the model's first words.)` : '';
+    fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)${speed}\n`);
     return r.filePath;
   });
 

@@ -242,7 +242,7 @@ function rankPrepared(pairs, asked, askedVec = null) {
     const { vec, ...pair } = p;
     const alike = unit && vec && vec.length === unit.length ? Math.max(0, dot(unit, vec)) : null;
     const score = alike === null ? worded : 0.7 * alike + 0.3 * Math.min(1, worded);
-    return { ...pair, i, score, match: (inQ >= (qt.size >= 4 ? 2 : 1) && share >= 0.5) || (alike !== null && alike >= 0.55) };
+    return { ...pair, i, score, ...(alike !== null ? { byMeaning: true } : {}), match: (inQ >= (qt.size >= 4 ? 2 : 1) && share >= 0.5) || (alike !== null && alike >= 0.55) };
   }).sort((x, y) => (y.match ? 1 : 0) - (x.match ? 1 : 0) || y.score - x.score || x.i - y.i).map(({ i, ...p }) => p);
 }
 

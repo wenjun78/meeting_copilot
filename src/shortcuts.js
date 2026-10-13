@@ -1,15 +1,19 @@
 'use strict';
 // Global shortcut defaults and a table of what the common meeting apps already use
 // on Windows, so a chosen combination can be checked before it is registered.
-// A global shortcut is taken from every other app while this one runs, which is why
-// the defaults use Ctrl+Alt+punctuation: none of the apps below bind those.
-// Sources (checked Oct 2026): Microsoft, Zoom, Google and Webex support pages.
+// A global shortcut is taken from every other app while this one runs. The two that are
+// pressed during a call are two keys each, both under the left hand (Alt with the thumb and
+// a letter), so they can be hit without looking and with the right hand on the mouse.
+// Alt+X and Alt+B are bound by none of the apps below.
+// Sources (checked Oct 2026): Microsoft, Zoom, Google, Webex, Chrome, Edge and Firefox support pages.
 
 const DEFAULTS = {
-  answer: 'CommandOrControl+Alt+,',   // answer what they said
-  screen: 'CommandOrControl+Alt+.',   // answer from the screen
+  answer: 'Alt+X',                    // answer what they said
+  screen: 'Alt+B',                    // answer from the screen
   toggle: 'CommandOrControl+Alt+/',   // show or hide the window
 };
+// The defaults of earlier versions, so settings still holding them can move to the new ones.
+const OLD_DEFAULTS = { answer: ['CommandOrControl+Alt+,'], screen: ['CommandOrControl+Alt+.'] };
 
 const TAKEN = {
   'Microsoft Teams': {
@@ -42,6 +46,13 @@ const TAKEN = {
     'Alt': 'A C G K L N P Q R T Enter F4 Up Down Left Right',
     'Ctrl': 'D E G H J L M N O Q R T W , / = - Plus F1 F6 Enter Delete',
     '': 'F1 F6',
+  },
+  'Chrome, Edge or Firefox': {
+    'Ctrl': 'A C D E F G H J K L N O P R S T U W 0 1 2 3 4 5 6 7 8 9 Tab Plus - Enter F4 F5 PageUp PageDown',
+    'Ctrl+Shift': 'A B C D E G I J K M N O P R S T W Delete Tab',
+    'Alt': 'D E F Left Right Home',
+    'Alt+Shift': 'A B I T',
+    '': 'F1 F3 F5 F6 F7 F10 F11 F12',
   },
   Windows: {
     'Ctrl+Alt': 'Delete Tab',
@@ -93,4 +104,4 @@ function problem(accelerator) {
   return users.length ? `Already used by ${users.join(', ')}.` : '';
 }
 
-module.exports = { DEFAULTS, TAKEN, parse, pretty, problem };
+module.exports = { DEFAULTS, OLD_DEFAULTS, TAKEN, parse, pretty, problem };

@@ -88,6 +88,9 @@ function renderIdle() {
 
 function renderAnswer() {
   const a = state.answer, card = $('card');
+  // Which of the two the answer on the card came from (an automatic answer is to what they said).
+  $('answerNow').setAttribute('aria-pressed', String(a.status !== 'idle' && (a.mode === 'auto' || a.mode === 'manual')));
+  $('answerScreen').setAttribute('aria-pressed', String(a.status !== 'idle' && a.mode === 'screen'));
   if (a.status === 'idle') return renderIdle();
   $('asked').hidden = !a.question && a.mode !== 'screen';
   $('asked').textContent = a.mode === 'typed' ? `You asked: ${a.question}`
@@ -206,7 +209,8 @@ window.mc.on('transcript', ({ type, entry }) => {
     lines.set(entry.id, node); $('lines').append(node);
   } else if (type === 'update') {
     const node = lines.get(entry.id);
-    if (node) { node.classList.remove('pending'); node.lastChild.textContent = entry.text; }
+    // Live transcription updates a line while it is still being spoken: it stays grey until final.
+    if (node) { node.classList.toggle('pending', !!entry.pending); node.lastChild.textContent = entry.text || '…'; }
   } else if (type === 'remove') {
     const node = lines.get(entry.id);
     if (node) { node.remove(); lines.delete(entry.id); }
@@ -230,7 +234,10 @@ $('exportAllBtn').addEventListener('click', async () => {
 // ---- listening --------------------------------------------------------------
 const levels = { them: 0, you: 0 };
 const capture = window.capture = new Capture({
-  onSegment: (who, wav, ms) => { window.mc.call('stt:segment', who, wav, ms); },
+  onSegment: (who, wav, ms, quietMs) => { window.mc.call('stt:segment', who, wav, ms, quietMs); },
+  onRecording: (bytes) => { window.mc.call('rec:chunk', bytes); },
+  onAudio: (who, samples, first) => { window.mc.call('stt:audio', who, samples.buffer, first); },
+  onDiscard: (who) => { window.mc.call('stt:discard', who); },
   onLevel: (who, rms) => { levels[who] = Math.max(rms, levels[who] * 0.8); },
   onSpeaking: (who, on) => { window.mc.call('stt:speaking', who, on); },
   onScreenText: (text) => {
@@ -267,13 +274,23 @@ function setListening(on) {
   updateSetupMode();
 }
 
+// Stops listening; a recording in progress is closed and its place shown.
+async function stopListening() {
+  await capture.stop();
+  setListening(false);
+  $('recState').hidden = true;
+  try { const file = await call('rec:stop'); if (file) toast(`Recording saved: ${file}`); } catch (e) { fail(e); }
+}
 async function begin(sourceId) {
   $('picker').hidden = true;
   $('toggle').disabled = true;
   try {
     const { systemAudio } = await call('capture:select', sourceId);
     const c = state.cfg.capture;
-    const res = await capture.start({ micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec });
+    // With a live speech model their words are streamed as they speak; otherwise each utterance is sent when it ends.
+    const live = await call('stt:live').catch(() => false);
+    const res = await capture.start({ live, micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec, record: !!c.record });
+    $('recState').hidden = !res.recording;
     for (const p of res.problems) toast(p, 'error');
     document.querySelector('.meter.them').classList.toggle('off', !res.them);
     document.querySelector('.meter.you').classList.toggle('off', !res.mic);
@@ -299,7 +316,7 @@ async function openPicker() {
   first.focus();
 }
 $('toggle').addEventListener('click', async () => {
-  if (state.listening) { await capture.stop(); setListening(false); } else openPicker();
+  if (state.listening) { await stopListening(); } else openPicker();
 });
 $('pickNone').addEventListener('click', () => begin(null));
 $('pickCancel').addEventListener('click', () => { $('picker').hidden = true; });
@@ -351,7 +368,7 @@ const SECTION_TEXT = {
   about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
   cv: { what: 'Your CV. Paste it here or add the file. Sent with every answer.', hint: 'Paste your CV, or drop the PDF or Word file below.' },
   jd: { what: 'The job description, agenda or brief for this meeting. Sent with every answer; replace it before a different meeting.', hint: 'Paste the job description, or drop the file below.' },
-  ask: { what: 'Questions you want to ask them. When they invite your questions, two or three that fit the conversation are suggested, leaving out any it has already answered. Sent with every answer.', hint: 'One question per line, the most important first.\nWhat does success look like in the first six months?\nHow is the team split between building and support?' },
+  ask: { what: 'Questions you want to ask them. When they invite your questions, the whole list is shown, less any the conversation has already answered, with one or two more that follow from what they said. Sent with every answer.', hint: 'One question per line, the most important first.\nWhat does success look like in the first six months?\nHow is the team split between building and support?' },
   publications: { what: 'Your papers. Add each PDF or Word file: it is searched section by section (methods, results, limitations), and its title and abstract go with every answer. Text typed here goes with every answer too.', hint: 'How you would sum up each paper in 30 seconds, your part in it, and what you would do differently.' },
   instructions: { what: 'How the answers should behave: tone, length, what to stress, what to avoid. Sent with every answer.', hint: 'Keep answers under 30 seconds. Lead with ...' },
 };
@@ -604,7 +621,7 @@ window.mc.on('kb', (e) => {
 // A row that opens to show the text of one file as the app read it.
 function previewRow(label, meta, sourceId, filePath, cut) {
   const body = el('pre', { class: 'preview-text', text: 'Loading' });
-  const details = el('details', {}, el('summary', {}, el('b', { title: label, text: label }), el('span', { class: cut ? 'cut' : '', text: meta })), body);
+  const details = el('details', { 'data-key': `${sourceId}|${filePath}` }, el('summary', {}, el('b', { title: label, text: label }), el('span', { class: cut ? 'cut' : '', text: meta })), body);
   details.addEventListener('toggle', async () => {
     if (!details.open || details.dataset.loaded) return;
     details.dataset.loaded = '1';
@@ -617,6 +634,9 @@ function previewRow(label, meta, sourceId, filePath, cut) {
 }
 async function renderEquipped() {
   const inv = await call('kb:inventory');
+  // A preview that is open stays open when the lists are drawn again (a source refreshed in
+  // the background while it was being read).
+  const wasOpen = new Set([...$('equippedPanel').querySelectorAll('details[open][data-key]')].map(d => d.dataset.key));
   const sent = inv.always.reduce((n, a) => n + a.sent, 0);
   const files = inv.searched.reduce((n, s) => n + s.files.length, 0);
   $('eqSummary').textContent = `${inv.always.length ? `${inv.always.length} ${inv.always.length === 1 ? 'note is' : 'notes are'} sent with every answer (${num(sent)} characters, about ${num(Math.round(sent / 6))} words).` : 'Nothing is sent with every answer yet.'} ${num(files)} ${files === 1 ? 'file' : 'files'} can be searched (${num(inv.passages)} passages).${inv.lean ? ' Lean mode is on, so less is sent.' : ''}${state.kb.embedded ? ' Search is by meaning as well as keywords.' : ' Search is by keywords.'}`;
@@ -634,6 +654,7 @@ async function renderEquipped() {
     if (filter || shown.length <= 8) d.open = true;
     return d;
   }).filter(Boolean) : [el('p', { class: 'empty', text: 'Nothing to search yet. Add your CV, or a repository under Portfolio.' })]));
+  for (const d of $('equippedPanel').querySelectorAll('details[data-key]')) if (wasOpen.has(d.dataset.key)) d.open = true;
 }
 let eqTimer;
 $('eqFilter').addEventListener('input', () => { clearTimeout(eqTimer); eqTimer = setTimeout(() => renderEquipped().catch(fail), 200); });
@@ -678,6 +699,7 @@ function fillSettings() {
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = ['en', 'zh'].includes(c.stt.language) ? c.stt.language : 'en+zh'; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
   $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
+  $('s-record').checked = !!c.capture.record;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;
   $('s-gh-token').placeholder = keyHint(s.githubToken); $('s-gh-api').value = c.github.apiBase;
   $('s-api-url').value = c.api.searchUrl; $('s-api-hname').value = c.api.headerName; $('s-api-hvalue').placeholder = keyHint(s.apiHeader);
@@ -686,6 +708,8 @@ function fillSettings() {
   $('kbAuto').checked = c.autoSync !== false;
   $('s-context').value = c.answerContext === 'lean' ? 'lean' : 'full';
   $('onTop').setAttribute('aria-pressed', String(c.ui.onTop !== false));
+  $('s-theme').value = c.ui.theme === 'light' ? 'light' : 'dark';
+  applyTheme(c.ui.theme);
   $('s-update').checked = c.autoUpdate !== false;
   for (const [action, id] of SHORTCUT_FIELDS) setShortcutField($(id), c.shortcuts[action] || '', state.labels[action] || '');
   applyShortcutLabels();
@@ -708,7 +732,7 @@ $('updateCheck').addEventListener('click', async () => {
 // `models` are suggestions for the answer model (any model name can be typed), with the price
 // per million tokens in and out as published in October 2026.
 const SERVICES = {
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol', stt: 'gpt-live-transcribe', extra: { reasoning_effort: 'low' },
     models: [['gpt-6.1-sol', 'default: balanced, $2 in / $10 out'], ['gpt-6-astra', 'most capable, $10 / $50'], ['gpt-5.6-sol', '$4 / $20'], ['gpt-6-luna', 'cheapest, $0.10 / $0.50']] },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' },
     models: [['openai/gpt-oss-120b', 'fast, $0.15 / $0.60'], ['openai/gpt-oss-20b', 'faster and smaller']] },
@@ -741,7 +765,7 @@ async function checkShortcutField(input) {
   const r = await call('shortcuts:check', input.dataset.accel);
   input.value = r.label || input.dataset.accel;
   const twin = SHORTCUT_FIELDS.map(([, id]) => $(id)).find(o => o !== input && o.dataset.accel === input.dataset.accel);
-  hint.textContent = twin ? `${r.label} is set twice. Each action needs its own keys.` : r.problem ? `${r.label}: ${r.problem} Pick something else.` : `${r.label} is free in Teams, Zoom, Meet and Webex.`;
+  hint.textContent = twin ? `${r.label} is set twice. Each action needs its own keys.` : r.problem ? `${r.label}: ${r.problem} Pick something else.` : `${r.label} is free in Teams, Zoom, Meet, Webex and the browsers.`;
   hint.classList.toggle('warn', !!(twin || r.problem));
 }
 for (const [, id] of SHORTCUT_FIELDS) {
@@ -767,6 +791,7 @@ for (const [, id] of SHORTCUT_FIELDS) {
 function applyShortcutLabels() {
   const l = state.labels || {};
   $('answerNow').title = l.answer || ''; $('answerScreen').title = l.screen || '';
+  $('keyAnswer').textContent = l.answer || ''; $('keyScreen').textContent = l.screen || '';
 }
 
 $('settings').addEventListener('submit', async (e) => {
@@ -783,7 +808,7 @@ $('settings').addEventListener('submit', async (e) => {
     embed: { baseUrl: v('s-embed-base'), model: v('s-embed-model') },
     github: { apiBase: v('s-gh-api') || 'https://api.github.com' },
     api: { searchUrl: v('s-api-url'), headerName: v('s-api-hname') },
-    capture: { micDeviceId: $('s-mic').value, themSource: $('s-them').value, ocrIntervalSec: Number($('s-ocr-int').value), ocrLangs: v('s-ocr-langs') || 'eng' },
+    capture: { micDeviceId: $('s-mic').value, themSource: $('s-them').value, ocrIntervalSec: Number($('s-ocr-int').value), ocrLangs: v('s-ocr-langs') || 'eng', record: $('s-record').checked },
     shortcuts: Object.fromEntries(SHORTCUT_FIELDS.map(([action, id]) => [action, $(id).dataset.accel || ''])),
   };
   const used = Object.values(patch.shortcuts).filter(Boolean);
@@ -801,6 +826,13 @@ $('settings').addEventListener('submit', async (e) => {
     toast(state.listening ? 'Settings saved. Audio changes apply the next time you start listening.' : 'Settings saved');
     if (state.answer.status === 'idle') renderIdle();
   } catch (err) { fail(err); }
+});
+$('recFolder').addEventListener('click', () => call('rec:openFolder').catch(fail));
+// Theme: applied as soon as it is chosen.
+function applyTheme(theme) { document.documentElement.classList.toggle('light', theme === 'light'); }
+$('s-theme').addEventListener('change', async () => {
+  applyTheme($('s-theme').value);
+  try { const r = await call('config:set', { ui: { theme: $('s-theme').value } }); state.cfg = r.config; } catch (e) { fail(e); }
 });
 // Window opacity, in the title bar: applied as the slider moves.
 $('opacity').addEventListener('input', () => call('config:set', { ui: { opacity: Number($('opacity').value) } }).catch(() => {}));

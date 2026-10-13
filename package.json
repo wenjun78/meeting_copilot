@@ -1,6 +1,6 @@
 {
   "name": "meeting-copilot",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Floating meeting overlay: live two-sided transcript, shared-screen OCR, and answer suggestions grounded in your GitHub repos and API.",
   "main": "main.js",
   "license": "MIT",
@@ -14,8 +14,10 @@
     "@tesseract.js-data/eng": "^1.0.0",
     "electron-updater": "^6.8.9",
     "mammoth": "^1.13.0",
+    "onnxruntime-web": "^1.30.0",
     "tesseract.js": "^7.0.0",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.8.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "electron": "^44.7.0",
@@ -34,7 +36,24 @@
       "preload.js",
       "src/**",
       "renderer/**",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-web/dist/*.map",
+      "!node_modules/onnxruntime-web/dist/*jsep*",
+      "!node_modules/onnxruntime-web/dist/*asyncify*",
+      "!node_modules/onnxruntime-web/dist/*jspi*",
+      "!node_modules/onnxruntime-web/dist/ort.all*",
+      "!node_modules/onnxruntime-web/dist/ort.bundle*",
+      "!node_modules/onnxruntime-web/dist/ort.webgpu*",
+      "!node_modules/onnxruntime-web/dist/ort.webgl*",
+      "!node_modules/onnxruntime-web/dist/ort.wasm.bundle*",
+      "!node_modules/onnxruntime-web/dist/ort.js",
+      "!node_modules/onnxruntime-web/dist/ort.mjs",
+      "!node_modules/onnxruntime-web/dist/ort.min.*",
+      "!node_modules/onnxruntime-web/dist/ort.wasm.js",
+      "!node_modules/onnxruntime-web/dist/ort.wasm.mjs",
+      "!node_modules/onnxruntime-web/dist/ort.wasm.min.mjs",
+      "!node_modules/onnxruntime-web/lib/**",
+      "!node_modules/onnxruntime-common/lib/**"
     ],
     "directories": {
       "buildResources": "build",

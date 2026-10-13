@@ -19,8 +19,12 @@ const REPO_FILES = [
   { path: 'wj-etl-pipeline-abc123/cv/sample-cv.docx', data: fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-cv.docx')) },
 ];
 
-function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92' } = {}) {
-  const log = { chat: [], stt: [], embed: [], search: [], github: [], tarballs: 0 };
+// live: how the live-transcription socket behaves: { lines: [...] } the final text of each
+// committed utterance in turn (default: sttLines), { refuse: 'reason' } rejects the session
+// settings, { silent: true } never sends a final text, { closeAfter: n } drops the connection
+// after n utterances.
+function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92', live = {} } = {}) {
+  const log = { chat: [], stt: [], embed: [], search: [], github: [], tarballs: 0, live: { sessions: [], auth: [], appended: [], commits: 0, clears: 0 } };
   const state = { pushedAt };
   let sttIndex = 0;
   const server = http.createServer((req, res) => {
@@ -97,9 +101,54 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-0
       json(404, { error: { message: 'no route' } });
     });
   });
+  // Live transcription: the Realtime transcription protocol, as far as the app uses it.
+  const { WebSocketServer } = require('ws');
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, 'http://x');
+    if (url.pathname !== '/v1/realtime' || url.searchParams.get('intent') !== 'transcription') return socket.destroy();
+    if (req.headers.authorization !== 'Bearer test-key') { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      log.live.auth.push(req.headers.authorization);
+      const lines = live.lines || sttLines;
+      let bytes = 0, item = 0, said = 0, done = 0, lineIndex = 0;
+      const send = (o) => ws.send(JSON.stringify(o));
+      const current = () => `item_${item}`;
+      const lineFor = () => lines[lineIndex % lines.length];
+      ws.on('message', (raw) => {
+        const e = JSON.parse(raw.toString());
+        if (e.type === 'session.update') {
+          log.live.sessions.push(e.session);
+          if (live.refuse) return send({ type: 'error', error: { code: 'invalid_request_error', message: live.refuse } });
+          return send({ type: 'session.updated', session: e.session });
+        }
+        if (e.type === 'input_audio_buffer.append') {
+          const n = Buffer.from(e.audio, 'base64').length;
+          bytes += n;
+          // Words come back while the audio is still arriving: one more for every 0.2 s (9,600 bytes at 24 kHz, 16 bit).
+          const words = lineFor().split(' ');
+          while (said < words.length - 1 && said < Math.floor(bytes / 9600)) send({ type: 'conversation.item.input_audio_transcription.delta', item_id: current(), content_index: 0, delta: (said ? ' ' : '') + words[said++] });
+          return;
+        }
+        if (e.type === 'input_audio_buffer.clear') { log.live.clears++; bytes = 0; said = 0; item++; return; }
+        if (e.type === 'input_audio_buffer.commit') {
+          if (!bytes) return send({ type: 'error', error: { code: 'input_audio_buffer_commit_empty', message: 'Error committing input audio buffer: buffer too small.' } });
+          log.live.commits++; log.live.appended.push(bytes);
+          const id = current(), words = lineFor().split(' '), text = lineFor(), from = said;
+          bytes = 0; said = 0; item++; lineIndex++;
+          send({ type: 'input_audio_buffer.committed', item_id: id });
+          if (live.silent) return;
+          for (let i = from; i < words.length; i++) send({ type: 'conversation.item.input_audio_transcription.delta', item_id: id, content_index: 0, delta: (i ? ' ' : '') + words[i] });
+          send({ type: 'conversation.item.input_audio_transcription.completed', item_id: id, content_index: 0, transcript: text });
+          if (live.closeAfter && ++done >= live.closeAfter) ws.close();
+        }
+      });
+    });
+  });
+
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => {
     const base = `http://127.0.0.1:${server.address().port}`;
-    resolve({ base, log, state, close: () => new Promise(r => { server.closeAllConnections(); server.close(r); }) });
+    resolve({ base, log, state, close: () => new Promise(r => { for (const c of wss.clients) c.terminate(); server.closeAllConnections(); server.close(r); }) });
   }));
 }
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:">
 <title>Meeting Copilot</title>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -31,6 +31,7 @@
 <div class="meters" id="meters" hidden>
   <div class="meter them"><span>Them</span><i><b id="lvThem"></b></i></div>
   <div class="meter you"><span>You</span><i><b id="lvYou"></b></i></div>
+  <span class="rec-state" id="recState" hidden>Recording</span>
   <span class="screen-state" id="screenState"></span>
 </div>
 
@@ -40,8 +41,8 @@
     <article class="card" id="card" aria-live="polite"></article>
     <div class="sources" id="sources" hidden></div>
     <div class="cue-actions">
-      <button id="answerNow" class="btn">Answer what they said</button>
-      <button id="answerScreen" class="btn">Answer from the screen</button>
+      <button id="answerNow" class="btn mode" aria-pressed="false"><span>Answer what they said</span><kbd id="keyAnswer"></kbd></button>
+      <button id="answerScreen" class="btn mode" aria-pressed="false"><span>Answer from the screen</span><kbd id="keyScreen"></kbd></button>
       <button id="copy" class="btn quiet" hidden>Copy</button>
     </div>
     <form id="askForm" class="ask">
@@ -166,7 +167,9 @@
           <label>Model that writes the answers <input id="s-llm-model" type="text" list="modelChoices"></label>
           <datalist id="modelChoices"></datalist>
           <p class="hint" id="modelHint"></p>
-          <label>Model that turns speech into text <input id="s-stt-model" type="text"></label>
+          <label>Model that turns speech into text <input id="s-stt-model" type="text" list="sttChoices"></label>
+          <datalist id="sttChoices"><option value="gpt-live-transcribe">live: their words appear as they speak, about $1 per hour of their speech</option><option value="gpt-4o-transcribe">after each pause, about $0.36 per hour of speech</option></datalist>
+          <p class="hint">With gpt-live-transcribe the other side is transcribed while they speak. Your microphone, and anything the live model misses, is transcribed after each pause with gpt-4o-transcribe.</p>
           <label id="s-llm-base-row">API address <input id="s-llm-base" type="text" placeholder="https://api.openai.com/v1"></label>
           <label>Spoken language <select id="s-stt-lang"><option value="en+zh">English and Mandarin</option><option value="en">English only</option><option value="zh">Mandarin only</option></select></label>
           <p class="hint">Speech is only ever written down as English or Mandarin, so it is not mistaken for another language. Choose one language if the whole meeting is in it: that is the most accurate.</p>
@@ -178,6 +181,10 @@
           <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
           <label>How much is sent with each answer <select id="s-context"><option value="full">Full: all your notes and the best matches</option><option value="lean">Lean: a smaller request, for free plans with tight limits</option></select></label>
           <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
+        </fieldset>
+        <fieldset>
+          <legend>Appearance</legend>
+          <label>Theme <select id="s-theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
         </fieldset>
         <fieldset>
           <legend>Shortcuts</legend>
@@ -192,6 +199,8 @@
           <label>Your microphone <select id="s-mic"></select></label>
           <label>Their audio <select id="s-them"></select></label>
           <p class="hint" id="themHint"></p>
+          <label class="check"><input id="s-record" type="checkbox"> Record the meeting's audio, both sides, to a file</label>
+          <p class="hint">Saved in Documents, in "Meeting Copilot Recordings", as a .webm file that plays in a browser, VLC or the Windows media player. Tell the other side you are recording where the law or the meeting's rules require it. <button id="recFolder" class="btn quiet" type="button">Open the folder</button></p>
           <label>Read the screen every <select id="s-ocr-int"><option value="2">2 seconds</option><option value="4">4 seconds</option><option value="8">8 seconds</option><option value="15">15 seconds</option></select></label>
           <label>Screen text languages <input id="s-ocr-langs" type="text" placeholder="eng (add more with +, e.g. eng+chi_sim)"></label>
         </fieldset>
@@ -243,6 +252,8 @@
 
 <div class="toasts" id="toasts" aria-live="assertive"></div>
 
+<script src="../node_modules/onnxruntime-web/dist/ort.wasm.min.js"></script>
+<script src="vad.js"></script>
 <script src="capture.js"></script>
 <script src="app.js"></script>
 </body>

@@ -18,10 +18,14 @@ const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|th
 //   'answer'     {type:'start'|'sources'|'delta'|'done'|'error', id, ...}
 //   'notice'     {level:'error'|'info', message}
 class Copilot extends EventEmitter {
-  constructor({ getConfig, llm, kb, liveSearch, debounceMs = 900 }) {
+  // debounceMs: how long after a finished question the answer starts. By then the pause has
+  // already lasted through the silence that ended the utterance and its transcription, so
+  // this only needs to cover a new utterance starting. trailMs: the longer wait when the
+  // sentence trails off and more is probably coming.
+  constructor({ getConfig, llm, kb, liveSearch, debounceMs = 250, trailMs = Math.round(debounceMs * 3.6) }) {
     super();
     this.getConfig = getConfig; this.llm = llm; this.kb = kb; this.liveSearch = liveSearch;
-    this.debounceMs = debounceMs;
+    this.debounceMs = debounceMs; this.trailMs = trailMs;
     this.entries = [];
     this.screenText = '';
     this.seq = 0;
@@ -56,31 +60,57 @@ class Copilot extends EventEmitter {
     else setTimeout(() => this._maybeAutoAnswer(), 350); // covers a trailing sound too short to be a segment
   }
 
-  // A finished stretch of speech from one side. who: 'them' | 'you'
-  async onSegment(who, wav, durationMs = 0) {
-    const generation = this.generation || 0;
-    const entry = { id: ++this.seq, who, text: '', t: Date.now() - durationMs, dur: durationMs, pending: true };
+  // A finished stretch of speech from one side, as a recording to transcribe. who: 'them' | 'you'
+  // quietMs: how long the silence after it had already lasted when the piece was cut.
+  async onSegment(who, wav, durationMs = 0, quietMs = 0) {
+    const entry = this.openUtterance(who, Date.now() - durationMs);
+    const vocab = (this.getConfig().stt.vocabulary || '').trim();
+    return this.finishUtterance(entry, () => this.llm.transcribe(wav, { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(this.sttTimeoutMs) }), durationMs, quietMs);
+  }
+
+  // Live transcription: the utterance is known to have started before its words are.
+  // It shows in the transcript at once and holds back an answer until it is finished.
+  openUtterance(who, startedAt = Date.now()) {
+    const entry = { id: ++this.seq, who, text: '', t: startedAt, dur: 0, pending: true, generation: this.generation || 0 };
     this.entries.push(entry);
     this.emit('transcript', { type: 'add', entry: { ...entry } });
     if (who === 'them') { this.pendingThem++; clearTimeout(this.timer); }
+    return entry;
+  }
+
+  // The words so far, while the utterance is still being spoken.
+  partialUtterance(entry, text) {
+    if (!entry.pending || entry.generation !== (this.generation || 0) || !this.entries.includes(entry)) return;
+    this.emit('transcript', { type: 'update', entry: { ...entry, text: String(text || '').trim() } });
+  }
+
+  // The utterance ended. getText() -> its final text ('' when nothing was said).
+  async finishUtterance(entry, getText, durationMs = 0, quietMs = 0) {
+    const { who } = entry;
+    entry.dur = durationMs; entry.ended = Date.now() - quietMs;
     let text = '';
-    try {
-      const vocab = (this.getConfig().stt.vocabulary || '').trim();
-      text = await this.llm.transcribe(wav, { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(this.sttTimeoutMs) });
-    } catch (e) {
+    try { text = await getText(); } catch (e) {
       this._notice('error', e.name === 'TimeoutError' || e.name === 'AbortError' ? 'Transcription timed out. Check your connection.' : e.message);
     }
-    if (generation !== (this.generation || 0)) return null; // meeting was cleared meanwhile
+    if (entry.generation !== (this.generation || 0)) return null; // meeting was cleared meanwhile
     if (who === 'them') this.pendingThem--;
     if (!text || (who === 'you' && this._isEchoOfThem(entry, text))) {
       this._remove(entry);
     } else {
-      entry.text = text; entry.pending = false;
+      entry.text = text; entry.pending = false; entry.heard = Date.now();
       this.emit('transcript', { type: 'update', entry: { ...entry } });
       if (who === 'them') this._dropEchoesOf(entry);
     }
     if (who === 'them') this._maybeAutoAnswer();
     return entry.pending ? null : entry;
+  }
+
+  // The utterance was not speech after all (a cough, too short to count).
+  cancelUtterance(entry) {
+    if (entry.generation !== (this.generation || 0) || !this.entries.includes(entry)) return;
+    if (entry.who === 'them') this.pendingThem--;
+    this._remove(entry);
+    if (entry.who === 'them') this._maybeAutoAnswer();
   }
 
   _remove(entry) {
@@ -122,7 +152,7 @@ class Copilot extends EventEmitter {
       if (e.id <= this.lastAnsweredId) break;
       if (run.length && run[0].t - e.t > 30000) break;
       run.unshift(e);
-      if (run.length >= 4) break;
+      if (run.length >= 8) break; // a long question arrives in several pieces
     }
     return run;
   }
@@ -165,7 +195,7 @@ class Copilot extends EventEmitter {
     this.timer = setTimeout(() => {
       if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
       if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
-    }, this.debounceMs * (trailsOff ? 2.2 : 1));
+    }, trailsOff ? this.trailMs : this.debounceMs);
   }
 
   _notice(level, message) {
@@ -180,6 +210,8 @@ class Copilot extends EventEmitter {
     if (this.abort) this.abort.abort();
     const id = ++this.answerSeq;
     const cfg = this.getConfig();
+    const begun = Date.now();
+    let spoken = null; // when the words being answered ended, and when their transcript arrived
 
     let asked = question.trim();
     if (mode === 'auto' || mode === 'manual') {
@@ -195,6 +227,8 @@ class Copilot extends EventEmitter {
       }
       asked = this._withContinuation(run);
       this.lastAnsweredId = run[run.length - 1].id;
+      const last = run[run.length - 1];
+      spoken = { end: last.ended || last.t + last.dur, heard: last.heard || Date.now() };
     }
     if (mode === 'screen') {
       if (!this.screenText) {
@@ -238,10 +272,11 @@ class Copilot extends EventEmitter {
         ],
       });
 
+      let firstWords = 0;
       const send = (lean) => this.llm.chatStream(this._buildMessages({ asked, mode, refs, prepared, cfg, lean }), {
         signal: ctl.signal,
         maxTokens: cfg.answerLength === 'detailed' ? 1800 : 1000, // headroom for reasoning models; the prompt sets the real length
-        onDelta: (piece) => this.emit('answer', { type: 'delta', id, text: piece }),
+        onDelta: (piece) => { if (!firstWords) firstWords = Date.now(); this.emit('answer', { type: 'delta', id, text: piece }); },
       });
       let lean = cfg.answerContext === 'lean';
       let text;
@@ -256,7 +291,12 @@ class Copilot extends EventEmitter {
       if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
       this.lastError = '';
       // Remembered so a follow-up ("make it shorter", "and the second point?") has something to refer to.
-      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
+      // Where the time went, for an answer to something they said: from the end of their
+      // words to the transcript (the silence that showed they had stopped, and transcription), from
+      // there to starting (waiting to see whether they carry on), and from there to the first
+      // words (search and the model).
+      const timing = spoken && firstWords ? { heard: spoken.heard - spoken.end, wait: begun - spoken.heard, first: firstWords - begun } : null;
+      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim(), ...(timing ? { timing } : {}) });
       if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
@@ -273,7 +313,7 @@ class Copilot extends EventEmitter {
     let vec = null;
     if (this.llm.embedConfigured() && this.kb.stats().embedded) {
       try {
-        const t = AbortSignal.timeout(1500);
+        const t = AbortSignal.timeout(700); // a slow lookup is not worth holding the answer for: keywords still search
         vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
       } catch { /* fall back to keyword search */ }
     }
@@ -300,12 +340,12 @@ class Copilot extends EventEmitter {
       '- Start with the answer itself in one or two sentences, first person, in plain spoken language. No preamble, no "You could say".',
       `- Then up to ${detailed ? 6 : 4} short bullets ("- ") with the concrete facts, numbers, names or steps that back it up.`,
       `- Stay under ${detailed ? 220 : 110} words. Reply in the language the question was asked in.`,
-      '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named, then one or two spoken sentences on how it works, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
+      '- When what is wanted is a query or code (SQL, Python, a formula, a command): put the complete, runnable answer first in a fenced code block with the language named. Inside the code, put a short comment above each logical step, numbered in the order the solution proceeds (for SQL: "-- 1. keep the last 30 days", "-- 2. count orders per customer", "-- 3. keep those with more than one"), each saying what the step does and why in plain words, so the user can talk through the code from top to bottom while typing it; no comment that merely restates the syntax, and none on trivial lines. Then one or two spoken sentences that follow the same steps in the same order, then at most two bullets on edge cases worth mentioning (NULLs, duplicates, ties, performance). Code does not count towards the word limit. Use the table and column names given; if they are not given, choose sensible ones and say which you assumed. Use the SQL dialect that is named or visible; otherwise standard SQL.',
       'Grounding:',
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
       '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
       '- "Answers I prepared" are replies the user wrote in advance for questions they expect; what they state is the user\'s own fact. When what is asked is the same question as one of them, or close to it in meaning even if worded differently, build the reply on that prepared answer: keep its facts, examples, numbers and stance, fit it to the format and to exactly what was asked, and do not swap in other material or add a "Check:" line for what it states. When two apply, combine them. When none is close to the question, leave them out.',
-      '- "Questions I want to ask the other side" in the pinned notes are the user\'s own questions for the people they are meeting. When the other side invites questions ("do you have any questions for us?", "anything you would like to ask?") or the user asks what to ask, reply with one short opening line and then two or three of those questions as bullets, worded to be said aloud: choose the ones that fit what was discussed, leave out any the conversation has already answered, and tie one to something the other side said when that is natural. Never answer these questions yourself, and do not bring them up at any other time.',
+      '- "Questions I want to ask the other side" in the pinned notes are the user\'s own questions for the people they are meeting. When the other side invites questions ("do you have any questions for us?", "anything you would like to ask?") or the user asks what to ask: write one short opening line, then every one of those questions that the conversation has not already answered, each as its own bullet, in the user\'s order and close to the user\'s wording (the limits on bullets and words do not apply to this reply). Leave out the ones the other side has already answered and end the list with one line starting "Skipped:" naming them in a few words each with what was said ("Skipped: team size (she said five)"); omit that line when none were answered. Then, under a line "Also worth asking:", add one or two further questions that follow from something the other side said in this conversation. Never answer these questions yourself, and do not bring them up at any other time.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
       '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',
@@ -352,7 +392,9 @@ class Copilot extends EventEmitter {
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     // Prepared answers, closest first, as many as fit. In lean mode only the closest few.
     const ready = [];
-    let space = lean ? 1500 : 16000;
+    // Ranked by meaning the right one is near the top, so fewer are needed (a shorter request
+    // is answered sooner); ranked by wording alone, more are sent to be safe.
+    let space = lean ? 1500 : prepared.some(x => x.byMeaning) ? 9000 : 16000;
     for (const p of prepared) {
       const item = `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`;
       if (item.length > space) { if (ready.length) break; continue; }
@@ -375,7 +417,7 @@ class Copilot extends EventEmitter {
     const at = (t) => `[${new Date(t).toLocaleTimeString()}]`;
     const said = this.entries.filter(e => !e.pending).map(e => ({ t: e.t, text: `${at(e.t)} ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}` }));
     const answers = this.history.map(h => ({ t: h.t || 0,
-      text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
+      text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}${h.timing ? ` (first words ${((h.timing.heard + h.timing.wait + h.timing.first) / 1000).toFixed(1)} s after they stopped)` : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
     return [...said, ...(withAnswers ? answers : [])].sort((a, b) => a.t - b.t).map(x => x.text).join('\n');
   }
 }
