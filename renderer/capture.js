@@ -47,14 +47,15 @@ class Capture {
     return all.filter(d => d.kind === 'audioinput').map(d => ({ id: d.deviceId, label: d.label || 'Microphone' }));
   }
 
-  // opts: { micDeviceId, themSource ('system' | deviceId), wantScreen, systemAudio, ocrIntervalSec, record }
+  // opts: { micDeviceId, themSource ('system' | deviceId), wantScreen, systemAudio, ocrIntervalSec, record, live }
+  // live: their speech is also handed on while it is being spoken (hooks.onAudio), for live transcription.
   async start(opts) {
     await this.stop();
     const result = { mic: false, them: false, screen: false, problems: [] };
     this.ctx = new AudioContext({ sampleRate: RATE });
     await this.ctx.audioWorklet.addModule('vad-worklet.js');
     this.sink = this.ctx.createGain(); this.sink.gain.value = 0; this.sink.connect(this.ctx.destination);
-    this.segmenters = []; this.themSeg = null;
+    this.segmenters = []; this.themSeg = null; this.live = !!opts.live;
     // Recording: both sides mixed into one track, encoded as it goes and handed on in pieces
     // every few seconds, so a crash loses seconds, not the meeting.
     this.recMix = null; this.recorder = null;
@@ -134,9 +135,24 @@ class Capture {
     // The other side is recorded readily (their words matter most); the microphone needs a
     // clearer case. Without headphones the microphone also hears the other side from the
     // speakers: what it picks up while they are speaking is their voice, and is not sent on.
+    // Live: their audio goes out about ten times a second while they speak, and what is
+    // still held is sent before the utterance is closed, so the pieces arrive in order.
+    let held = [], heldFirst = false;
+    const sendHeld = () => {
+      if (!held.length) return;
+      const samples = new Float32Array(held.length * BLOCK);
+      held.forEach((b, i) => samples.set(b, i * BLOCK));
+      this.hooks.onAudio(who, samples, heldFirst);
+      held = []; heldFirst = false;
+    };
+    const streaming = who === 'them' && this.live;
     const seg = new Segmenter({
       detect: this.model ? this.model.stream() : loudnessDetector(),
-      onUtterance: (pcm, quietMs) => this.hooks.onSegment(who, encodeWav(pcm), Math.round(pcm.length / RATE * 1000), Math.round(quietMs)),
+      onUtterance: (pcm, quietMs) => { sendHeld(); this.hooks.onSegment(who, encodeWav(pcm), Math.round(pcm.length / RATE * 1000), Math.round(quietMs)); },
+      ...(streaming ? {
+        onAudio: (blocks, first) => { if (first) { held = []; heldFirst = true; } held.push(...blocks); if (first || held.length >= 3) sendHeld(); },
+        onDiscard: () => { held = []; heldFirst = false; this.hooks.onDiscard(who); },
+      } : {}),
       onLevel: (rms) => this.hooks.onLevel(who, rms),
       onSpeaking: (on) => this.hooks.onSpeaking(who, on),
       onProblem: (e) => console.warn('speech model failed, using loudness:', e),

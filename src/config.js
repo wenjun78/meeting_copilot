@@ -12,7 +12,9 @@ const DEFAULTS = {
   answerContext: 'full',              // 'full' | 'lean' (less sent per answer, for services with tight token limits)
   defaults: 3,                        // which set of defaults these settings were last brought up to
   llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-6.1-sol', extra: { reasoning_effort: 'low' } },
-  stt: { baseUrl: '', apiKey: '', model: 'gpt-4o-transcribe', language: 'en+zh', vocabulary: '' }, // 'en+zh' | 'en' | 'zh'
+  // stt.model: a live model (gpt-live-transcribe) streams the other side's speech as it is spoken;
+  // batchModel transcribes recordings: the microphone, and anything the live model fails on.
+  stt: { baseUrl: '', apiKey: '', model: 'gpt-live-transcribe', batchModel: 'gpt-4o-transcribe', delay: 'low', language: 'en+zh', vocabulary: '' }, // language: 'en+zh' | 'en' | 'zh'
   embed: { baseUrl: '', apiKey: '', model: '' },
   github: { token: '', apiBase: 'https://api.github.com' },
   api: { searchUrl: '', headerName: 'Authorization', headerValue: '' },
@@ -53,6 +55,8 @@ class ConfigStore {
     if ((raw.defaults || 1) < 3 && raw.shortcuts) {
       for (const [action, old] of Object.entries(OLD_SHORTCUTS)) if (old.includes(raw.shortcuts[action])) raw.shortcuts[action] = SHORTCUTS[action];
     }
+    // Speech: the earlier default model moves to live transcription, on OpenAI only (where it exists).
+    if ((raw.defaults || 1) < 3 && raw.stt && raw.stt.model === 'gpt-4o-transcribe' && !raw.stt.baseUrl && /^https:\/\/api\.openai\.com/.test((raw.llm && raw.llm.baseUrl) || DEFAULTS.llm.baseUrl)) raw.stt.model = 'gpt-live-transcribe';
     raw.defaults = DEFAULTS.defaults;
     this.data = merge(DEFAULTS, raw);
     // Speech is read as English, Mandarin or both; any other saved setting becomes both.

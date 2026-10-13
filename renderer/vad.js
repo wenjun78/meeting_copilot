@@ -57,11 +57,13 @@
   //   pause: how many quiet blocks (32 ms each) end an utterance. Shorter means the answer
   //   starts sooner; too short cuts people off between phrases.
   //   masked(): true while the other side is audible (the microphone hearing the speakers).
+  //   onAudio(blocks, first): for live transcription, the audio of the utterance as it is
+  //   recorded (first: an utterance begins); onDiscard(): it turned out not to be kept.
   // An utterance ends on that pause. A long turn is cut at a breath so text keeps coming, and
   // recording carries straight on, so nothing between two pieces is lost.
   class Segmenter {
-    constructor({ detect, onUtterance, onLevel = () => {}, onSpeaking = () => {}, onProblem = () => {}, masked = null, start = 0.5, stay = 0.35, pause = 22 }) {
-      Object.assign(this, { detect, onUtterance, onLevel, onSpeaking, onProblem, masked, start, stay, pause });
+    constructor({ detect, onUtterance, onAudio = null, onDiscard = () => {}, onLevel = () => {}, onSpeaking = () => {}, onProblem = () => {}, masked = null, start = 0.5, stay = 0.35, pause = 22 }) {
+      Object.assign(this, { detect, onUtterance, onAudio, onDiscard, onLevel, onSpeaking, onProblem, masked, start, stay, pause });
       this.pre = []; this.cur = null; this.hot = 0; this.n = 0; this.heardAt = -1e9;
       this.chain = Promise.resolve();
     }
@@ -93,11 +95,13 @@
           this.cur = { blocks: this.pre.slice(), voiced: 2, quiet: 0, masked: 0 };
           this.pre = []; this.hot = 0;
           this.onSpeaking(true);
+          if (this.onAudio) this.onAudio(this.cur.blocks.slice(), true);
         }
         return;
       }
       const c = this.cur;
       c.blocks.push(block);
+      if (this.onAudio) this.onAudio([block], c.blocks.length === 1); // the first block after a cut begins a new utterance
       if (p >= this.stay) { c.voiced++; c.quiet = 0; } else c.quiet++;
       if (this.masked && this.masked()) c.masked++;
       const seconds = c.blocks.length * BLOCK_MS / 1000;
@@ -111,9 +115,9 @@
       if (!c) return;
       if (carryOn) this.cur = { blocks: [], voiced: 0, quiet: c.quiet, masked: 0 };
       else this.onSpeaking(false);
-      if (c.voiced < 6) return; // under a fifth of a second of speech: a click, a cough, "mm"
+      if (c.voiced < 6) return this.onDiscard(); // under a fifth of a second of speech: a click, a cough, "mm"
       // Heard mostly while the other side was talking: it is their voice from the speakers.
-      if (this.masked && c.masked / c.blocks.length >= 0.6) return;
+      if (this.masked && c.masked / c.blocks.length >= 0.6) return this.onDiscard();
       const keep = c.blocks.length - Math.max(0, c.quiet - 6); // leave ~200 ms of trailing silence
       const pcm = new Float32Array(keep * BLOCK);
       for (let i = 0; i < keep; i++) pcm.set(c.blocks[i], i * BLOCK);

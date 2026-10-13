@@ -45,8 +45,10 @@ function fakeSpeechWav(file) {
   const child = spawn(cmd, argv, { cwd: path.join(__dirname, '..'), stdio: 'inherit', env: { ...process.env, MC_USER_DATA: tmp, MC_E2E: path.join(__dirname, 'e2e-hook.js'), MC_E2E_OUT: out, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' } });
   child.on('exit', async (code) => {
     await srv.close();
-    console.log(`\nmock API saw: ${srv.log.stt.length} transcription calls, ${srv.log.chat.length} chat calls`);
+    console.log(`\nmock API saw: ${srv.log.live.commits} utterances streamed live in ${srv.log.live.sessions.length} session(s), ${srv.log.stt.length} recordings transcribed, ${srv.log.chat.length} chat calls`);
     console.log(`screenshots and result.json in ${out}`);
+    // Their speech is expected to have gone through the live session, not as recordings.
+    if (!code && !srv.log.live.commits) { console.error('e2e failed: nothing was transcribed live'); process.exit(1); }
     process.exit(code || 0);
   });
 })();

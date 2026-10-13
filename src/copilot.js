@@ -60,22 +60,39 @@ class Copilot extends EventEmitter {
     else setTimeout(() => this._maybeAutoAnswer(), 350); // covers a trailing sound too short to be a segment
   }
 
-  // A finished stretch of speech from one side. who: 'them' | 'you'
+  // A finished stretch of speech from one side, as a recording to transcribe. who: 'them' | 'you'
   // quietMs: how long the silence after it had already lasted when the piece was cut.
   async onSegment(who, wav, durationMs = 0, quietMs = 0) {
-    const generation = this.generation || 0;
-    const entry = { id: ++this.seq, who, text: '', t: Date.now() - durationMs, dur: durationMs, ended: Date.now() - quietMs, pending: true };
+    const entry = this.openUtterance(who, Date.now() - durationMs);
+    const vocab = (this.getConfig().stt.vocabulary || '').trim();
+    return this.finishUtterance(entry, () => this.llm.transcribe(wav, { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(this.sttTimeoutMs) }), durationMs, quietMs);
+  }
+
+  // Live transcription: the utterance is known to have started before its words are.
+  // It shows in the transcript at once and holds back an answer until it is finished.
+  openUtterance(who, startedAt = Date.now()) {
+    const entry = { id: ++this.seq, who, text: '', t: startedAt, dur: 0, pending: true, generation: this.generation || 0 };
     this.entries.push(entry);
     this.emit('transcript', { type: 'add', entry: { ...entry } });
     if (who === 'them') { this.pendingThem++; clearTimeout(this.timer); }
+    return entry;
+  }
+
+  // The words so far, while the utterance is still being spoken.
+  partialUtterance(entry, text) {
+    if (!entry.pending || entry.generation !== (this.generation || 0) || !this.entries.includes(entry)) return;
+    this.emit('transcript', { type: 'update', entry: { ...entry, text: String(text || '').trim() } });
+  }
+
+  // The utterance ended. getText() -> its final text ('' when nothing was said).
+  async finishUtterance(entry, getText, durationMs = 0, quietMs = 0) {
+    const { who } = entry;
+    entry.dur = durationMs; entry.ended = Date.now() - quietMs;
     let text = '';
-    try {
-      const vocab = (this.getConfig().stt.vocabulary || '').trim();
-      text = await this.llm.transcribe(wav, { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(this.sttTimeoutMs) });
-    } catch (e) {
+    try { text = await getText(); } catch (e) {
       this._notice('error', e.name === 'TimeoutError' || e.name === 'AbortError' ? 'Transcription timed out. Check your connection.' : e.message);
     }
-    if (generation !== (this.generation || 0)) return null; // meeting was cleared meanwhile
+    if (entry.generation !== (this.generation || 0)) return null; // meeting was cleared meanwhile
     if (who === 'them') this.pendingThem--;
     if (!text || (who === 'you' && this._isEchoOfThem(entry, text))) {
       this._remove(entry);
@@ -86,6 +103,14 @@ class Copilot extends EventEmitter {
     }
     if (who === 'them') this._maybeAutoAnswer();
     return entry.pending ? null : entry;
+  }
+
+  // The utterance was not speech after all (a cough, too short to count).
+  cancelUtterance(entry) {
+    if (entry.generation !== (this.generation || 0) || !this.entries.includes(entry)) return;
+    if (entry.who === 'them') this.pendingThem--;
+    this._remove(entry);
+    if (entry.who === 'them') this._maybeAutoAnswer();
   }
 
   _remove(entry) {

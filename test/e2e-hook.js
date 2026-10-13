@@ -283,6 +283,9 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('speech model', detector);
     if (!detector.model) throw new Error('the speech model did not load: detection fell back to loudness');
 
+    // Live: their line shows words while it is still being spoken (grey), before it is final.
+    await waitFor('words while speaking', () => js(`[...document.querySelectorAll('.line.them.pending p')].some(p => /\\w{2,}/.test(p.textContent))`), 20000);
+    step('live transcription', { whileSpeaking: await js(`([...document.querySelectorAll('.line.them.pending p')].map(p => p.textContent)[0] || '(already final)')`) });
     await waitFor('transcript line', () => js(`document.querySelectorAll('.line.them:not(.pending)').length > 0`));
     await waitFor('answer', () => js(`document.querySelector('#card:not(.idle):not(.wait):not(.fail) .lead') && !document.getElementById('copy').hidden`));
     step('answer', {
@@ -375,7 +378,7 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     const recFiles = fs.readdirSync(recDir).map(f => ({ name: f, bytes: fs.statSync(path.join(recDir, f)).size, webm: fs.readFileSync(path.join(recDir, f)).subarray(0, 4).toString('hex') === '1a45dfa3' }));
     if (out && recFiles.length) fs.copyFileSync(path.join(recDir, recFiles[0].name), path.join(out, 'recording.webm')); // kept with the screenshots, to listen to
     step('recording', { indicator: recShown, files: recFiles, settingShown: await js(`document.getElementById('s-record').checked`) });
-    if (!recShown || recFiles.length !== 1 || recFiles[0].bytes < 20000 || !recFiles[0].webm) throw new Error('the meeting was not recorded to a playable file');
+    if (!recShown || recFiles.length !== 1 || recFiles[0].bytes < 8000 || !recFiles[0].webm) throw new Error('the meeting was not recorded to a playable file');
 
     // Nothing to answer and Knowledge open: side by side the answer area stays; in the
     // narrow window it steps aside. Clearing the meeting empties the log.

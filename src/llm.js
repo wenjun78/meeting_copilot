@@ -74,7 +74,9 @@ class LLM {
   // heard as Malay, Japanese, Korean ...), the same audio is sent once more with the language
   // fixed, so the words come out in the language that was spoken.
   async transcribe(wav, { prompt = '', signal } = {}) {
-    const { base, key, model, own } = this._endpoint('stt');
+    const { base, key, own } = this._endpoint('stt');
+    // A live model takes a stream, not a recording: recordings go to the model for recordings.
+    const model = /live/i.test(own.model || '') ? (own.batchModel || 'gpt-4o-transcribe') : own.model;
     const mode = speechLanguage(own.language);
     const send = async (format, language) => {
       const boundary = '----mc' + Math.random().toString(16).slice(2) + Date.now().toString(16);

@@ -41,7 +41,9 @@ npm start
 ## First run
 
 1. **Settings**: choose the service (OpenAI by default, with `gpt-6.1-sol`
-   for answers and `gpt-4o-transcribe` for speech; Groq is one click away,
+   for answers and `gpt-live-transcribe` for speech (the other side's words
+   appear while they speak; your microphone is transcribed after each pause
+   with `gpt-4o-transcribe`); Groq is one click away,
    and any OpenAI-compatible service works) and paste its API key.
    Fill in "Names and terms to get right".
 2. **Knowledge**: add `owner/repo`, a GitHub username (pulls every repo that
@@ -53,13 +55,13 @@ npm start
 
 | | |
 |---|---|
-| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
+| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses; with a live speech model their line fills in while they speak, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
 | Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
 | Recording | Optional (Settings > Audio and screen): the meeting's audio, both sides, kept as a .webm file in Documents/Meeting Copilot Recordings. Tell the other side where the law or the meeting's rules require it |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
 | Answers | Written automatically when they ask a question; one or two sentences to say, then supporting points, with numbered sources you can click |
 | Ask | Type your own question, or "Answer from the screen" for what is being shown, including SQL and code tasks |
-| Window | Drag by the title bar, resize from any edge, minimise, maximise, compact (answer only), adjustable opacity |
+| Window | Light or dark theme. Drag by the title bar, resize from any edge, minimise, maximise, compact (answer only), adjustable opacity |
 
 ## Shortcuts
 
@@ -68,16 +70,18 @@ click on this app during a call.
 
 | Keys | Action |
 |---|---|
-| `Ctrl+Alt+,` | Answer what they said |
-| `Ctrl+Alt+.` | Answer from the screen |
+| `Alt+X` | Answer what they said |
+| `Alt+B` | Answer from the screen |
 | `Ctrl+Alt+/` | Show or hide the window |
 
-The defaults were checked against the published Windows shortcut lists for
-Teams, Zoom, Google Meet and Webex (October 2026): none of them use
-Ctrl+Alt with a punctuation key. Change them under Settings > Shortcuts;
-the field tells you if a combination is already used by one of those apps,
-and the app warns at start-up if another program has taken the keys. (`Cmd`
-replaces `Ctrl` on macOS.)
+The two used during a call are two keys each, both under the left hand, so
+they can be pressed without looking. The defaults were checked against the
+published Windows shortcut lists for Teams, Zoom, Google Meet, Webex, Chrome,
+Edge and Firefox (October 2026): none of them use these. Each is printed on
+its button, and the button the current answer came from is filled. Change
+them under Settings > Shortcuts; the field tells you if a combination is
+already used by one of those apps, and the app warns at start-up if another
+program has taken the keys. (`Cmd` replaces `Ctrl` on macOS.)
 
 ## How "Answer from the screen" works
 

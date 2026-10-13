@@ -16,7 +16,8 @@
     "mammoth": "^1.13.0",
     "onnxruntime-web": "^1.30.0",
     "tesseract.js": "^7.0.0",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.8.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "electron": "^44.7.0",
@@ -95,6 +96,6 @@
         "repo": "meeting_copilot"
       }
     ],
-    "copyright": "Copyright \u00a9 2026 wjun78"
+    "copyright": "Copyright © 2026 wjun78"
   }
 }

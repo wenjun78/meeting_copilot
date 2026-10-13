@@ -167,7 +167,9 @@
           <label>Model that writes the answers <input id="s-llm-model" type="text" list="modelChoices"></label>
           <datalist id="modelChoices"></datalist>
           <p class="hint" id="modelHint"></p>
-          <label>Model that turns speech into text <input id="s-stt-model" type="text"></label>
+          <label>Model that turns speech into text <input id="s-stt-model" type="text" list="sttChoices"></label>
+          <datalist id="sttChoices"><option value="gpt-live-transcribe">live: their words appear as they speak, about $1 per hour of their speech</option><option value="gpt-4o-transcribe">after each pause, about $0.36 per hour of speech</option></datalist>
+          <p class="hint">With gpt-live-transcribe the other side is transcribed while they speak. Your microphone, and anything the live model misses, is transcribed after each pause with gpt-4o-transcribe.</p>
           <label id="s-llm-base-row">API address <input id="s-llm-base" type="text" placeholder="https://api.openai.com/v1"></label>
           <label>Spoken language <select id="s-stt-lang"><option value="en+zh">English and Mandarin</option><option value="en">English only</option><option value="zh">Mandarin only</option></select></label>
           <p class="hint">Speech is only ever written down as English or Mandarin, so it is not mistaken for another language. Choose one language if the whole meeting is in it: that is the most accurate.</p>

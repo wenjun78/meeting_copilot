@@ -209,7 +209,8 @@ window.mc.on('transcript', ({ type, entry }) => {
     lines.set(entry.id, node); $('lines').append(node);
   } else if (type === 'update') {
     const node = lines.get(entry.id);
-    if (node) { node.classList.remove('pending'); node.lastChild.textContent = entry.text; }
+    // Live transcription updates a line while it is still being spoken: it stays grey until final.
+    if (node) { node.classList.toggle('pending', !!entry.pending); node.lastChild.textContent = entry.text || '…'; }
   } else if (type === 'remove') {
     const node = lines.get(entry.id);
     if (node) { node.remove(); lines.delete(entry.id); }
@@ -235,6 +236,8 @@ const levels = { them: 0, you: 0 };
 const capture = window.capture = new Capture({
   onSegment: (who, wav, ms, quietMs) => { window.mc.call('stt:segment', who, wav, ms, quietMs); },
   onRecording: (bytes) => { window.mc.call('rec:chunk', bytes); },
+  onAudio: (who, samples, first) => { window.mc.call('stt:audio', who, samples.buffer, first); },
+  onDiscard: (who) => { window.mc.call('stt:discard', who); },
   onLevel: (who, rms) => { levels[who] = Math.max(rms, levels[who] * 0.8); },
   onSpeaking: (who, on) => { window.mc.call('stt:speaking', who, on); },
   onScreenText: (text) => {
@@ -284,7 +287,9 @@ async function begin(sourceId) {
   try {
     const { systemAudio } = await call('capture:select', sourceId);
     const c = state.cfg.capture;
-    const res = await capture.start({ micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec, record: !!c.record });
+    // With a live speech model their words are streamed as they speak; otherwise each utterance is sent when it ends.
+    const live = await call('stt:live').catch(() => false);
+    const res = await capture.start({ live, micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec, record: !!c.record });
     $('recState').hidden = !res.recording;
     for (const p of res.problems) toast(p, 'error');
     document.querySelector('.meter.them').classList.toggle('off', !res.them);
@@ -727,7 +732,7 @@ $('updateCheck').addEventListener('click', async () => {
 // `models` are suggestions for the answer model (any model name can be typed), with the price
 // per million tokens in and out as published in October 2026.
 const SERVICES = {
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol', stt: 'gpt-4o-transcribe', extra: { reasoning_effort: 'low' },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol', stt: 'gpt-live-transcribe', extra: { reasoning_effort: 'low' },
     models: [['gpt-6.1-sol', 'default: balanced, $2 in / $10 out'], ['gpt-6-astra', 'most capable, $10 / $50'], ['gpt-5.6-sol', '$4 / $20'], ['gpt-6-luna', 'cheapest, $0.10 / $0.50']] },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', stt: 'whisper-large-v3', extra: { reasoning_effort: 'low' },
     models: [['openai/gpt-oss-120b', 'fast, $0.15 / $0.60'], ['openai/gpt-oss-20b', 'faster and smaller']] },

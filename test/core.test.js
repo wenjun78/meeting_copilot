@@ -203,7 +203,8 @@ test('config store encrypts secrets at rest and keeps free-form extra params', (
   assert.equal(b.llm.apiKey, 'gsk_secret');
   assert.deepEqual(b.llm.extra, {});
   assert.equal(b.github.apiBase, 'https://ghe.example/api/v3');
-  assert.equal(b.stt.model, 'gpt-4o-transcribe');
+  assert.equal(b.stt.model, 'gpt-live-transcribe');
+  assert.equal(b.stt.batchModel, 'gpt-4o-transcribe');
   assert.equal(b.llm.baseUrl, 'https://api.openai.com/v1');
   assert.equal(b.llm.model, 'gpt-6.1-sol');
 
@@ -1322,4 +1323,103 @@ test('answers start promptly after a finished question, and the saved log says w
   const count = (list) => (co._buildMessages({ asked: 'q', mode: 'typed', refs: [], prepared: list, cfg })[1].content.match(/^Q: /gm) || []).length;
   const byWording = count(many), byMeaning = count(many.map(x => ({ ...x, byMeaning: true })));
   assert.ok(byWording >= 24 && byMeaning >= 12 && byMeaning < byWording * 0.65, `${byWording} by wording, ${byMeaning} by meaning`);
+});
+
+test('live transcription: words arrive while they speak, the final text at the pause, and a recording is the fallback', async () => {
+  const { LiveTranscriber, liveUrl, isLiveModel, keywordsFrom, to24k } = require('../src/live');
+  assert.equal(liveUrl('https://api.openai.com/v1/'), 'wss://api.openai.com/v1/realtime?intent=transcription');
+  assert.ok(isLiveModel('gpt-live-transcribe') && !isLiveModel('gpt-4o-transcribe') && !isLiveModel('whisper-large-v3'));
+  assert.deepEqual(keywordsFrom('CPM, Databricks; Wen Jun\n<script>, ' + 'x'.repeat(80)), ['CPM', 'Databricks', 'Wen Jun', 'script']);
+  // 16 kHz -> 24 kHz: three samples for every two, 16-bit.
+  const up = to24k(Float32Array.from([0, 0.5, 1, 0.5]));
+  assert.equal(up.length, 12);
+  assert.ok(up.readInt16LE(0) === 0 && up.readInt16LE(6) === 32767 && up.readInt16LE(2) > 0 && up.readInt16LE(2) < up.readInt16LE(4));
+
+  const audio = (seconds) => new Float32Array(Math.round(16000 * seconds)).fill(0.1);
+  const open = async (live, extra = {}) => {
+    const s = await mock.start({ live });
+    const t = new LiveTranscriber({ url: liveUrl(s.base + '/v1'), apiKey: 'test-key', model: 'gpt-live-transcribe', languages: ['en', 'zh'], keywords: ['CPM'], prompt: 'A meeting.', finalMs: 300, ...extra });
+    return { s, t };
+  };
+
+  // The session is opened with the model, both languages and the keywords, and no turn detection.
+  let { s, t } = await open({ lines: ['How do you handle duplicate customer records?', 'And at ten times the volume?'] });
+  await t.connect();
+  assert.deepEqual(s.log.live.sessions[0], { type: 'transcription', audio: { input: { format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: 'gpt-live-transcribe', delay: 'low', languages: ['en', 'zh'], keywords: ['CPM'], prompt: 'A meeting.' }, turn_detection: null } } });
+  assert.deepEqual(s.log.live.auth, ['Bearer test-key']);
+
+  // While audio is sent the words so far come back; at the commit, the whole sentence.
+  const partials = [];
+  t.on('partial', (text) => partials.push(text));
+  t.begin();
+  for (let i = 0; i < 10; i++) t.append(audio(0.1));
+  await new Promise(r => setTimeout(r, 60));
+  assert.ok(partials.length >= 3 && /^How do you/.test(partials.at(-1)), partials.join(' | '));
+  assert.equal(await t.commit(), 'How do you handle duplicate customer records?');
+  assert.equal(s.log.live.appended[0], 16000 * 1.5 * 2, '1 s at 16 kHz went out as 24 kHz 16-bit');
+  // The next utterance is its own item; a discarded one is cleared and gives no text.
+  t.begin(); t.append(audio(0.3)); t.discard();
+  t.begin(); t.append(audio(0.5));
+  assert.equal(await t.commit(), 'And at ten times the volume?');
+  assert.equal(s.log.live.clears, 1);
+  await assert.rejects(() => { t.begin(); return t.commit(); }, /Nothing was streamed/);
+  t.close(); await s.close();
+
+  // Refused settings, a wrong key and a silent service each give a reason instead of hanging.
+  ({ s, t } = await open({ refuse: 'Model gpt-live-transcribe is not available on your plan.' }));
+  await assert.rejects(t.connect(), /not available on your plan/);
+  t.close(); await s.close();
+  ({ s, t } = await open({}, { apiKey: 'wrong' }));
+  await assert.rejects(t.connect(), /API key was rejected/);
+  await s.close();
+  ({ s, t } = await open({ silent: true }));
+  await t.connect();
+  t.begin(); t.append(audio(0.5));
+  await assert.rejects(t.commit(), /did not arrive in time/);
+  t.close(); await s.close();
+  // A dropped connection fails what was waiting and can be opened again.
+  ({ s, t } = await open({ closeAfter: 1, lines: ['One.', 'Two.'] }));
+  await t.connect();
+  t.begin(); t.append(audio(0.5));
+  assert.equal(await t.commit(), 'One.');
+  await new Promise(r => t.once('closed', r));
+  assert.ok(!t.open);
+  await t.connect(); // a new session
+  t.begin(); t.append(audio(0.5));
+  assert.equal(await t.commit(), 'One.');
+  t.close(); await s.close();
+
+  // In the meeting: the line shows at once, fills in while they speak, and is final at the pause.
+  const events = [];
+  const co = new Copilot({ getConfig: cfgFor(), llm: { transcribe: async () => 'from the recording', chatStream: async () => 'ok', embedConfigured: () => false }, kb: new KnowledgeBase(null), debounceMs: 20 });
+  co.on('transcript', e => events.push([e.type, e.entry.pending, e.entry.text]));
+  const entry = co.openUtterance('them');
+  co.partialUtterance(entry, 'We shipped');
+  co.partialUtterance(entry, 'We shipped the release');
+  await co.finishUtterance(entry, async () => 'We shipped the release last week.', 2000, 550);
+  assert.deepEqual(events, [['add', true, ''], ['update', true, 'We shipped'], ['update', true, 'We shipped the release'], ['update', false, 'We shipped the release last week.']]);
+  // When the live text fails, the caller's fallback (the recording) supplies it; a cancelled utterance leaves no line.
+  const second = co.openUtterance('them');
+  await co.finishUtterance(second, async () => { try { throw new Error('late'); } catch { return 'from the recording'; } }, 1000, 550);
+  assert.equal(co.entries.at(-1).text, 'from the recording');
+  const third = co.openUtterance('them');
+  co.cancelUtterance(third);
+  assert.equal(co.entries.length, 2);
+  assert.equal(co.pendingThem, 0);
+
+  // A live model is never sent a recording: recordings go to the model for recordings.
+  const s3 = await mock.start({ sttLines: ['My own words.'] });
+  const llm = new LLM(() => ({ llm: { baseUrl: s3.base + '/v1', apiKey: 'test-key', model: 'm' }, stt: { baseUrl: '', apiKey: '', model: 'gpt-live-transcribe', batchModel: 'gpt-4o-transcribe', language: 'en', vocabulary: '' } }));
+  assert.equal(await llm.transcribe(Buffer.from('RIFF....WAVEfmt ')), 'My own words.');
+  assert.equal(s3.log.stt.at(-1).model, 'gpt-4o-transcribe');
+  await s3.close();
+
+  // Saved settings on the earlier default model move to live transcription, on OpenAI only.
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'live-')), 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ defaults: 2, stt: { model: 'gpt-4o-transcribe' } }));
+  assert.equal(new ConfigStore(file).load().stt.model, 'gpt-live-transcribe');
+  fs.writeFileSync(file, JSON.stringify({ defaults: 2, llm: { baseUrl: 'https://api.groq.com/openai/v1' }, stt: { model: 'whisper-large-v3' } }));
+  assert.equal(new ConfigStore(file).load().stt.model, 'whisper-large-v3');
+  fs.writeFileSync(file, JSON.stringify({ defaults: 3, stt: { model: 'gpt-4o-transcribe' } }));
+  assert.equal(new ConfigStore(file).load().stt.model, 'gpt-4o-transcribe', 'chosen after the change: kept');
 });

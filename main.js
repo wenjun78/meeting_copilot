@@ -16,6 +16,8 @@ const { isIndexable, frontMatter } = require('./src/rag/chunker');
 const shortcuts = require('./src/shortcuts');
 const { moveSettingsTextToNotes } = require('./src/migrate');
 const { QA_FILE, normalizePairs, parseQA, parseQATable } = require('./src/qa');
+const { LiveTranscriber, liveUrl, isLiveModel, keywordsFrom } = require('./src/live');
+const { cleanTranscript, languageToForce, speechLanguage } = require('./src/llm');
 const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
@@ -107,6 +109,49 @@ function publicConfig() {
   const labels = Object.fromEntries(Object.entries(c.shortcuts).map(([k, v]) => [k, shortcuts.pretty(v)]));
   return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable(), version: app.getVersion(), updates: updater.supported };
 }
+
+// ---- live transcription of the other side ---------------------------------------
+// With a live speech model their words are streamed while they speak: the text appears as
+// it is said and is final the moment they pause. Every utterance is also kept as a
+// recording, so when the live session cannot be used, or gives nothing for an utterance,
+// that recording is transcribed the ordinary way and nothing is lost.
+let live = null;      // the open session, while listening
+let liveTurn = null;  // the utterance being streamed: { entry }
+let liveMisses = 0;   // utterances in a row the live session gave nothing for
+let liveNote = '';    // the reason already shown, so it is said once
+
+function liveSettings() {
+  const cfg = config.get(), stt = cfg.stt;
+  if (!isLiveModel(stt.model)) return null;
+  const base = stt.baseUrl || cfg.llm.baseUrl, key = stt.baseUrl ? stt.apiKey : (stt.apiKey || cfg.llm.apiKey);
+  if (!base || !key) return null;
+  const mode = speechLanguage(stt.language);
+  return { url: liveUrl(base), apiKey: key, model: stt.model, delay: stt.delay || 'low', languages: mode === 'en+zh' ? ['en', 'zh'] : [mode],
+    keywords: keywordsFrom(stt.vocabulary), prompt: 'A live video meeting, often a job interview.' };
+}
+function liveUnavailable(reason) {
+  if (liveNote === reason) return;
+  liveNote = reason;
+  send('notice', { level: 'error', message: `Live transcription is not available: ${reason} Their speech is transcribed after each pause instead, with ${config.get().stt.batchModel || 'gpt-4o-transcribe'}.` });
+}
+function liveStop() { if (live) live.close(); live = null; liveTurn = null; }
+// -> true when their speech will be streamed
+async function liveStart() {
+  liveStop(); liveMisses = 0;
+  const settings = liveSettings();
+  if (!settings) return false;
+  const session = new LiveTranscriber(settings);
+  session.on('partial', (text) => { if (live === session && liveTurn) copilot.partialUtterance(liveTurn.entry, text); });
+  session.on('closed', () => { if (live === session) { live = null; } });
+  try { await session.connect(); } catch (e) { liveUnavailable(/[.!?]$/.test(e.message) ? e.message : e.message + '.'); return false; }
+  live = session; liveNote = '';
+  return true;
+}
+// The recording of an utterance, transcribed the ordinary way.
+const transcribeRecording = (wav) => {
+  const vocab = (config.get().stt.vocabulary || '').trim();
+  return llm.transcribe(Buffer.from(wav), { prompt: vocab ? `Glossary: ${vocab}` : '', signal: AbortSignal.timeout(25000) });
+};
 
 // ---- recordings ---------------------------------------------------------------
 // Kept where the user will find them: Documents/Meeting Copilot Recordings.
@@ -581,8 +626,47 @@ function wireIpc() {
     const bytes = (file) => { const b = fs.readFileSync(file); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
     return { model: bytes(path.join(__dirname, 'renderer', 'vad', 'silero_vad_v5.onnx')), wasm: bytes(path.join(dist, 'ort-wasm-simd-threaded.wasm')), runtimeDir: pathToFileURL(dist + path.sep).href };
   });
+  // Asked when listening starts: is their speech going to be streamed?
+  handle('stt:live', () => liveStart());
+  // A piece of their speech while it is being spoken (16 kHz samples). first: an utterance begins.
+  handle('stt:audio', (who, samples, first) => {
+    if (who !== 'them' || !live) return false;
+    if (first) {
+      if (liveTurn) { live.discard(); copilot.cancelUtterance(liveTurn.entry); liveTurn = null; } // the one before never ended
+      if (!live.open) { liveStart(); return false; } // the connection dropped: this utterance goes by its recording
+      liveTurn = { entry: copilot.openUtterance('them') };
+      live.begin();
+    }
+    if (liveTurn) live.append(new Float32Array(samples));
+    return !!liveTurn;
+  });
+  // Their utterance turned out not to be speech worth keeping.
+  handle('stt:discard', (who) => {
+    if (who !== 'them' || !liveTurn) return false;
+    if (live) live.discard();
+    copilot.cancelUtterance(liveTurn.entry); liveTurn = null;
+    return true;
+  });
   handle('stt:segment', (who, wav, durationMs, quietMs) => {
     if (who !== 'them' && who !== 'you') return false;
+    if (who === 'them' && liveTurn && live) {
+      // The streamed utterance ended: its final text comes from the live session. If that
+      // gives nothing in time, or text in another language, the recording is transcribed instead.
+      const turn = liveTurn, session = live; liveTurn = null;
+      const bothLanguages = speechLanguage(config.get().stt.language) === 'en+zh';
+      copilot.finishUtterance(turn.entry, async () => {
+        try {
+          const text = cleanTranscript({ text: await session.commit() });
+          if (text && !(bothLanguages && languageToForce(text, ''))) { liveMisses = 0; return text; }
+        } catch (e) {
+          if (++liveMisses >= 2 && live === session) { liveStop(); liveUnavailable(/[.!?]$/.test(e.message) ? e.message : e.message + '.'); }
+        } finally {
+          if (live === session && session.stale) liveStart(); // renewed between utterances, before the session's time limit
+        }
+        return transcribeRecording(wav);
+      }, Number(durationMs) || 0, Number(quietMs) || 0);
+      return true;
+    }
     copilot.onSegment(who, Buffer.from(wav), Number(durationMs) || 0, Number(quietMs) || 0); // result arrives as 'transcript' events
     return true;
   });
@@ -600,6 +684,7 @@ function wireIpc() {
     meetingOn = !!on;
     if (starting) autoSync({ force: true }).catch(() => {}); // not awaited: listening starts immediately
     if (!on) downloadUpdate(); // an update found during the meeting is fetched once it ends
+    if (!on) liveStop();
     return true;
   });
   handle('meeting:reset', () => { copilot.reset(); return true; });
