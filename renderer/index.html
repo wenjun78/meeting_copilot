@@ -59,6 +59,7 @@
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="transcript" aria-selected="true">Transcript</button>
       <button role="tab" data-tab="screen" aria-selected="false">Screen</button>
+      <button role="tab" data-tab="summary" aria-selected="false">Summary</button>
       <button role="tab" data-tab="knowledge" aria-selected="false">Knowledge</button>
       <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
     </nav>
@@ -77,6 +78,17 @@
       <canvas id="screenPreview" class="preview" hidden></canvas>
       <pre class="screen-text" id="screenText"></pre>
       <p class="empty" id="screenEmpty">No screen is being read. When you start listening, pick the screen or the meeting window that shows the shared content.</p>
+    </div>
+
+    <div class="panel" id="tab-summary" role="tabpanel" hidden>
+      <p class="hint" id="summaryState" hidden></p>
+      <article class="summary" id="summaryText" aria-live="polite"></article>
+      <p class="empty" id="summaryEmpty">No summary yet. When you stop listening, the call is written up here: what was covered, what they told you, how you did and what to follow up.</p>
+      <div class="panel-foot">
+        <button id="summaryMake" class="btn quiet" title="Write the summary from the transcript as it stands">Write summary</button>
+        <button id="summaryCopy" class="btn quiet" hidden>Copy</button>
+        <button id="summarySave" class="btn quiet" hidden title="The summary as a text file">Save summary</button>
+      </div>
     </div>
 
     <div class="panel" id="tab-knowledge" role="tabpanel" hidden>
@@ -179,6 +191,7 @@
           <legend>Answers</legend>
           <p class="hint">What the answers draw on (about you, your CV, the job description, instructions, your portfolio) is under Knowledge.</p>
           <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
+          <label class="check"><input id="s-summary" type="checkbox"> Write a summary of the call when listening stops</label>
           <label>How much is sent with each answer <select id="s-context"><option value="full">Full: all your notes and the best matches</option><option value="lean">Lean: a smaller request, for free plans with tight limits</option></select></label>
           <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
         </fieldset>

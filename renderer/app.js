@@ -95,7 +95,7 @@ function renderAnswer() {
   $('asked').hidden = !a.question && a.mode !== 'screen';
   $('asked').textContent = a.mode === 'typed' ? `You asked: ${a.question}`
     : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : a.reading ? 'Reading the screen' : 'Answering what is on the screen')
-      : `They said: ${a.question}`;
+      : `They said: ${tailOf(a.question)}`;
   $('asked').className = 'asked' + (a.mode === 'typed' || a.mode === 'screen' ? ' mine' : '');
   if (a.status === 'error') { card.className = 'card fail'; card.textContent = a.error; }
   else if (!a.text && a.stale) { card.className = 'card stale'; renderAnswerText(card, a.stale, a.staleSources); card.prepend(el('p', { class: 'updating', text: 'They added to the question. Updating the answer' })); }
@@ -134,7 +134,9 @@ window.mc.on('answer', (e) => {
 // Each finished answer is added to the transcript where it was given, and listed under
 // the current answer (in the wide layout) so an earlier one can be read again.
 const answerLog = [];
-const askedLabel = (a) => (a.mode === 'typed' ? `You asked: ${a.question}` : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : 'From the screen') : `They said: ${a.question}`);
+// A long turn is shown by its end, where the question is.
+const tailOf = (q) => (q && q.length > 260 ? `… ${q.slice(-240).replace(/^\S*\s/, '')}` : q);
+const askedLabel = (a) => (a.mode === 'typed' ? `You asked: ${a.question}` : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : 'From the screen') : `They said: ${tailOf(a.question)}`);
 function logAnswer(a) {
   if (!a.text || !a.text.trim() || answerLog.some(x => x.id === a.id)) return;
   const item = { id: a.id, t: Date.now(), mode: a.mode, question: a.question || '', text: a.text, sources: a.sources || [] };
@@ -223,12 +225,67 @@ $('resetBtn').addEventListener('click', async () => {
   lines.clear(); $('lines').replaceChildren(); restyleLines();
   answerLog.length = 0;
   state.answer = { id: state.answer.id, text: '', sources: [], status: 'idle' }; renderAnswer(); renderLog();
+  state.summary = { status: 'idle', text: '' }; renderSummary();
 });
 $('exportBtn').addEventListener('click', async () => {
   try { const p = await call('meeting:export', { answers: false }); if (p) toast(`Transcript saved to ${p}`); } catch (e) { fail(e); }
 });
 $('exportAllBtn').addEventListener('click', async () => {
   try { const p = await call('meeting:export', { answers: true }); if (p) toast(`Transcript with answers saved to ${p}`); } catch (e) { fail(e); }
+});
+
+// ---- summary: the call written up when it ends ----------------------------------------
+state.summary = { status: 'idle', text: '' };
+function renderSummary() {
+  const m = state.summary, box = $('summaryText');
+  box.replaceChildren();
+  let list = null;
+  for (const raw of m.text.split('\n')) {
+    const line = raw.trim();
+    if (!line) { list = null; continue; }
+    const head = /^#{1,6}\s+(.*)$/.exec(line), bullet = /^(?:[-*•]|\d+[.)])\s+(.*)$/.exec(line);
+    if (head) { list = null; box.append(el('h3', { text: head[1].replace(/\*\*/g, '') })); continue; }
+    if (bullet) {
+      if (!list) box.append((list = el('ul')));
+      const li = el('li'); inline(li, bullet[1], []); list.append(li);
+      continue;
+    }
+    list = null;
+    // "Went well:" and "Weak:" label the lists under them; "Better:" belongs to the point above it.
+    const bare = line.replace(/\*\*/g, ''), better = /^better:\s*(.*)$/i.exec(bare);
+    const p = el('p', { class: better ? 'better' : /^(went well|weak):/i.test(bare) ? 'mark' : '' });
+    if (better) { p.append(el('strong', { text: 'Better: ' })); inline(p, better[1], []); } else inline(p, line, []);
+    box.append(p);
+  }
+  const note = $('summaryState');
+  note.hidden = !(m.status === 'working' || m.status === 'error');
+  note.classList.toggle('warn', m.status === 'error');
+  note.textContent = m.status === 'error' ? m.error : m.text ? 'Writing the summary' : m.trimmed ? 'The call is more than the service takes at once. Summarising the last part of it' : 'Reading the transcript';
+  $('summaryEmpty').hidden = !!m.text || m.status !== 'idle';
+  $('summaryMake').textContent = m.text && m.status !== 'working' ? 'Write it again' : 'Write summary';
+  $('summaryMake').disabled = m.status === 'working';
+  $('summaryCopy').hidden = $('summarySave').hidden = !(m.status === 'done' && m.text);
+}
+window.mc.on('summary', (e) => {
+  const m = state.summary;
+  if (e.type === 'start') { state.summary = { status: 'working', text: '', trimmed: !!e.trimmed, kept: m.status === 'done' ? m.text : m.kept || '' }; showTab('summary'); }
+  else if (e.type === 'delta') m.text += e.text;
+  else if (e.type === 'done') { m.status = 'done'; m.text = e.text || m.text; m.kept = ''; }
+  // A summary that could not be rewritten leaves the one before it in place.
+  else if (e.type === 'error') state.summary = m.kept ? { status: 'done', text: m.kept } : { status: 'error', text: '', error: e.message };
+  if (e.type === 'error' && state.summary.status === 'done') toast(`The summary was not rewritten: ${e.message}`, 'error');
+  cancelAnimationFrame(state.sumRaf);
+  state.sumRaf = requestAnimationFrame(() => {
+    const panel = $('tab-summary');
+    const pinned = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 80;
+    renderSummary();
+    if (pinned && state.summary.status === 'working') panel.scrollTop = panel.scrollHeight;
+  });
+});
+$('summaryMake').addEventListener('click', () => { state.summary = { ...state.summary, status: 'working', kept: state.summary.status === 'done' ? state.summary.text : '', text: '' }; renderSummary(); call('meeting:summary').catch(fail); });
+$('summaryCopy').addEventListener('click', async () => { await navigator.clipboard.writeText(state.summary.text); toast('Summary copied'); });
+$('summarySave').addEventListener('click', async () => {
+  try { const p = await call('meeting:summarySave'); if (p) toast(`Summary saved to ${p}`); } catch (e) { fail(e); }
 });
 
 // ---- listening --------------------------------------------------------------
@@ -699,6 +756,7 @@ function fillSettings() {
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = ['en', 'zh'].includes(c.stt.language) ? c.stt.language : 'en+zh'; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
   $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
+  $('s-summary').checked = c.summaryOnStop !== false;
   $('s-record').checked = !!c.capture.record;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;
   $('s-gh-token').placeholder = keyHint(s.githubToken); $('s-gh-api').value = c.github.apiBase;
@@ -802,7 +860,7 @@ $('settings').addEventListener('submit', async (e) => {
   const v = (id) => $(id).value.trim();
   const patch = {
     autoUpdate: $('s-update').checked,
-    autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value, answerContext: $('s-context').value,
+    autoAnswer: $('s-auto').checked ? 'questions' : 'off', answerLength: $('s-length').value, answerContext: $('s-context').value, summaryOnStop: $('s-summary').checked,
     llm: { baseUrl: v('s-llm-base'), model: v('s-llm-model'), extra },
     stt: { baseUrl: v('s-stt-base'), model: v('s-stt-model'), language: v('s-stt-lang'), vocabulary: v('s-stt-vocab') },
     embed: { baseUrl: v('s-embed-base'), model: v('s-embed-model') },

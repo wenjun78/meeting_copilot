@@ -1,7 +1,7 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const EVENTS = ['transcript', 'answer', 'notice', 'kb', 'hotkey', 'window'];
+const EVENTS = ['transcript', 'answer', 'summary', 'notice', 'kb', 'hotkey', 'window'];
 
 contextBridge.exposeInMainWorld('mc', {
   call: (channel, ...args) => ipcRenderer.invoke(channel, ...args),

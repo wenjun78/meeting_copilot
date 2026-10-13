@@ -221,7 +221,8 @@ const norm = (t) => (t.length > 5 && t.endsWith('ly') ? t.slice(0, -2) : t.lengt
 const words = (text, opts) => new Set(tokenize(text, opts).map(norm));
 function rankPrepared(pairs, asked, askedVec = null) {
   const said = words(asked, { question: true });
-  const unit = askedVec && askedVec.length ? normalized(askedVec) : null;
+  // One vector, or several (the question, and the whole turn it closed): the closest counts.
+  const units = (askedVec && askedVec.length ? (typeof askedVec[0] === 'number' ? [askedVec] : askedVec) : []).map(normalized);
   const docs = pairs.map(p => ({ qt: words(p.q), at: words(p.a) }));
   // A word that appears in many of the prepared questions ("spark", "data") says less about
   // which one is meant than a word that appears in one.
@@ -240,7 +241,8 @@ function rankPrepared(pairs, asked, askedVec = null) {
     // By meaning, when both sides have been embedded: a question asked in other words
     // ("where do you look when a job crawls?") still lands on the prepared one.
     const { vec, ...pair } = p;
-    const alike = unit && vec && vec.length === unit.length ? Math.max(0, dot(unit, vec)) : null;
+    const fits = vec ? units.filter(u => u.length === vec.length) : [];
+    const alike = fits.length ? Math.max(0, ...fits.map(u => dot(u, vec))) : null;
     const score = alike === null ? worded : 0.7 * alike + 0.3 * Math.min(1, worded);
     return { ...pair, i, score, ...(alike !== null ? { byMeaning: true } : {}), match: (inQ >= (qt.size >= 4 ? 2 : 1) && share >= 0.5) || (alike !== null && alike >= 0.55) };
   }).sort((x, y) => (y.match ? 1 : 0) - (x.match ? 1 : 0) || y.score - x.score || x.i - y.i).map(({ i, ...p }) => p);

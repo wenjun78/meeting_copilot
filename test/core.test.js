@@ -1099,13 +1099,13 @@ test('an answer is not started over for a few trailing words, and waits longer w
   await say('In SQL.');
   await wait(80);
   assert.equal(lines.length, 2);
-  assert.equal(lines[1], 'How do you handle duplicate customer records? In SQL.');
+  assert.equal(lines[1], 'How do you handle duplicate customer records? Take your time. Okay, no rush, whenever you are ready. In SQL.', 'the whole turn is the question');
   lines.pop();
   // More of the question: answered again, as one question.
   await say('And how would that change with ten times the data?');
   await wait(80);
   assert.equal(lines.length, 2);
-  assert.match(lines[1], /^How do you handle duplicate customer records\? In SQL\. And how would that change with ten times the data\?$/);
+  assert.match(lines[1], /^How do you handle duplicate customer records\? .*In SQL\. And how would that change with ten times the data\?$/);
 
   // A sentence that trails off is given longer; when the rest arrives it is answered once, whole.
   co.reset(); lines.length = 0;
@@ -1422,4 +1422,251 @@ test('live transcription: words arrive while they speak, the final text at the p
   assert.equal(new ConfigStore(file).load().stt.model, 'whisper-large-v3');
   fs.writeFileSync(file, JSON.stringify({ defaults: 3, stt: { model: 'gpt-4o-transcribe' } }));
   assert.equal(new ConfigStore(file).load().stt.model, 'gpt-4o-transcribe', 'chosen after the change: kept');
+});
+
+test('the question is their whole turn: everything they said since the user last spoke', async () => {
+  const waiting = [], asked = [], prompts = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (messages, { onDelta }) => {
+      prompts.push(messages[1].content);
+      asked.push((/(?:They just said: |since I last spoke[^\n]*\n)"([\s\S]*?)"\nWrite what I should say\./.exec(messages[1].content) || [])[1]);
+      onDelta('ok'); return 'ok';
+    },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const searched = [];
+  const kb = new KnowledgeBase(null);
+  kb.search = (q) => { searched.push(q); return []; };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb, debounceMs: 20 });
+  const say = async (who, text, ms = 3000) => { const p = co.onSegment(who, Buffer.from('x'), ms); waiting.shift()(text); await p; };
+  const settle = () => new Promise(r => setTimeout(r, 90));
+  // Pieces are given their place in time afterwards: each `gap` seconds after the one before ended.
+  let clock = Date.now() - 600000;
+  const place = (gap = 0.3) => { const e = co.entries.at(-1); clock += gap * 1000; e.t = clock; clock += e.dur; };
+
+  // The start of the meeting: an introduction, then the question. All of it is the question.
+  await say('them', 'Thank you for joining. My name is Phuong and I look after hiring for the people team.'); place();
+  await say('them', 'Perhaps a quick introduction about yourself would be great?'); place();
+  await settle();
+  assert.equal(asked.at(-1), 'Thank you for joining. My name is Phuong and I look after hiring for the people team. Perhaps a quick introduction about yourself would be great?');
+
+  // The user answers. From here on, her next turn is the question, however long.
+  await say('you', 'My background brings together data science and AI in education and at Lenovo.', 8000); place(1);
+  const pieces = [];
+  co.setSpeaking('them', true);
+  for (let i = 1; i <= 14; i++) {
+    const text = i < 14 ? `Part ${i} of the scenario: a director says attrition rose in market ${i} and blames pay.` : 'So how would you approach this request?';
+    pieces.push(text);
+    await say('them', text, 9000); place(0.4);
+    // The microphone hears a little of her from the speakers; that is not the user taking a turn.
+    if (i === 6) { await say('you', 'a director says attrition rose in market', 3000); const echo = co.entries.at(-1); if (echo && echo.who === 'you') { echo.t = co.entries.at(-2).t + 1000; } }
+    if (i === 9) { await say('you', 'Mm-hm.', 400); place(0); }
+  }
+  co.setSpeaking('them', false);
+  await new Promise(r => setTimeout(r, 480));
+  assert.equal(asked.at(-1), pieces.join(' '), 'all fourteen pieces, two minutes of talk, are the question');
+  assert.ok(!asked.at(-1).includes('Phuong'), 'what came before the user spoke is not part of it');
+  assert.match(prompts.at(-1), /Everything they have said since I last spoke \(the question is usually at the end/);
+  // It is searched by its end, where the question is.
+  assert.ok(searched.at(-1).length <= 700 && /So how would you approach this request\?$/.test(searched.at(-1)) && !/Part 1 of/.test(searched.at(-1)), searched.at(-1));
+
+  // The user answers; she adds a remark much later (no question): nothing restarts.
+  const before = asked.length;
+  await say('you', 'I would first check whether fifteen percent is comparable with earlier quarters.', 9000); place(1);
+  await say('them', 'I see, that makes sense.'); place(1);
+  await settle();
+  assert.equal(asked.length, before);
+  // Then a new question: the turn since the user spoke, remark included.
+  await say('them', 'What data would you capture as a standard?'); place(0.5);
+  await settle();
+  assert.equal(asked.at(-1), 'I see, that makes sense. What data would you capture as a standard?');
+
+  // With no microphone at all the turn never ends by itself: two minutes of silence start a new
+  // one, and a turn is never more than about five minutes of talk.
+  co.reset(); clock = Date.now() - 3600000;
+  await say('them', 'Earlier topic, long ago. What is your notice period?'); place();
+  await settle();
+  await say('them', 'Now a different question after a long silence: when could you start?'); place(150);
+  await settle();
+  assert.equal(asked.at(-1), 'Now a different question after a long silence: when could you start?');
+  co.setSpeaking('them', true);
+  for (let i = 0; i < 70; i++) { await say('them', `Sentence ${i} of a very long talk that goes on and on without any pause from the speaker.`, 5000); place(0.2); }
+  co.setSpeaking('them', false);
+  await say('them', 'So what do you think?'); place(0.2);
+  await new Promise(r => setTimeout(r, 480));
+  assert.ok(asked.at(-1).length > 3000 && asked.at(-1).length < 5300 && /So what do you think\?$/.test(asked.at(-1)) && !/Sentence 0 of/.test(asked.at(-1)), `${asked.at(-1).length} characters`);
+});
+
+test('greetings from the user do not count as their answer: the turn before them is kept', async () => {
+  const waiting = [], asked = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (messages, { onDelta }) => {
+      asked.push((/(?:They just said: |since I last spoke[^\n]*\n)"([\s\S]*?)"\nWrite what I should say\./.exec(messages[1].content) || [])[1]);
+      onDelta('ok'); return 'ok';
+    },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null), debounceMs: 20 });
+  const say = async (who, text, ms = 3000) => { const p = co.onSegment(who, Buffer.from('x'), ms); waiting.shift()(text); await p; };
+  const settle = () => new Promise(r => setTimeout(r, 90));
+  let clock = Date.now() - 600000;
+  const place = (gap = 0.5) => { const e = co.entries.at(-1); clock += gap * 1000; e.t = clock; clock += e.dur; };
+
+  await say('them', 'Hi Wen Jun, thanks for joining. I am Phuong from the people team, and this role sits in the data platform group.'); place();
+  await say('you', 'Hello, nice to meet you too. Yes, I can hear you clearly. Thank you so much for having me today.', 5000); place();
+  await say('them', 'Lovely. I will walk through the role first.'); place();
+  await say('you', 'Sounds good, thank you.', 1500); place();
+  await say('you', '好的，谢谢你，很高兴认识你。', 2000); place();
+  await say('them', 'So to begin, could you introduce yourself?'); place();
+  await settle();
+  assert.equal(asked.at(-1), 'Hi Wen Jun, thanks for joining. I am Phuong from the people team, and this role sits in the data platform group. Lovely. I will walk through the role first. So to begin, could you introduce yourself?');
+
+  // A real reply does end her turn, in either language, also when it opens with a greeting.
+  await say('you', 'Thank you. I am an AI engineer with five years in data platforms and retrieval systems.', 8000); place();
+  await say('them', 'What did you build most recently?'); place();
+  await settle();
+  assert.equal(asked.at(-1), 'What did you build most recently?');
+  await say('you', '好的，我最近做了一个检索增强的问答系统。', 5000); place();
+  await say('them', 'How did you evaluate it?'); place();
+  await settle();
+  assert.equal(asked.at(-1), 'How did you evaluate it?');
+});
+
+test('search by meaning takes the whole turn from its start, looked up while the app waits', async () => {
+  const waiting = [], embeds = [], order = [];
+  const toy = (t) => [/Part 1 of/.test(t) ? 1 : 0, /approach/.test(t) ? 1 : 0, 0.1]; // the set-up, the question
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (_m, { onDelta }) => { onDelta('ok'); return 'ok'; },
+    embedConfigured: () => true,
+    embed: async (texts) => { embeds.push(texts); order.push('embed'); await new Promise(r => setTimeout(r, 30)); return texts.map(toy); },
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const kb = new KnowledgeBase(null);
+  const searches = [];
+  kb.stats = () => ({ embedded: 3 });
+  kb.search = (q, k, vec) => { searches.push({ q, vec }); return []; };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb, debounceMs: 60 });
+  co.on('answer', e => { if (e.type === 'start') order.push('answer'); });
+  // Each piece is placed in time straight after the one before it.
+  let clock = Date.now() - 600000;
+  const say = async (who, text, ms = 3000) => {
+    const p = co.onSegment(who, Buffer.from('x'), ms);
+    const e = co.entries.at(-1); clock += 300; e.t = clock; clock += ms;
+    waiting.shift()(text); await p;
+  };
+
+  // A short question: one text, asked for before the answer starts and not asked for again.
+  await say('them', 'How would you approach a request like this?');
+  await new Promise(r => setTimeout(r, 200));
+  assert.deepEqual(embeds, [['How would you approach a request like this?']]);
+  assert.deepEqual(order, ['embed', 'answer'], 'the lookup runs during the wait, not after it');
+  assert.ok(searches.at(-1).vec, 'and its result is used');
+
+  // A long turn: the end of it for the words, and the whole of it for the meaning as well.
+  await say('you', 'I would begin by asking what decision the analysis is for.', 6000);
+  const setUp = Array.from({ length: 12 }, (_, i) => `Part ${i + 1} of the scenario: a director says attrition rose in market ${i + 1} and blames pay.`);
+  co.setSpeaking('them', true);
+  for (const text of setUp) await say('them', text, 6000);
+  co.setSpeaking('them', false);
+  await say('them', 'So how would you approach it?');
+  await new Promise(r => setTimeout(r, 600));
+  const whole = [...setUp, 'So how would you approach it?'].join(' ');
+  assert.equal(embeds.length, 2, 'one request for the turn');
+  const [end, all] = embeds[1];
+  assert.ok(end.length <= 700 && whole.endsWith(end));
+  assert.equal(all, whole, 'the turn from its start');
+  assert.equal(searches.at(-1).q, end);
+  const v = searches.at(-1).vec;
+  assert.ok(v[0] > 0 && v[1] > v[0], 'the set-up counts, and the end counts twice');
+
+  // A lookup that fails or is slow does not hold the answer: keywords search alone.
+  llm.embed = async () => { throw new Error('no service'); };
+  await say('you', 'I would compare like with like before anything else.', 6000);
+  await say('them', 'And what data would you ask for first?');
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal(searches.at(-1).vec, null);
+
+  // Prepared answers: the closest of the vectors counts.
+  const pairs = [{ q: 'Why did people leave?', a: 'Pay and growth.', vec: [1, 0, 0] }, { q: 'Notice period?', a: 'One month.', vec: [0, 0, 1] }];
+  const ranked = require('../src/qa').rankPrepared(pairs, 'So what would you do?', [[0, 1, 0], [0.9, 0.1, 0]]);
+  assert.equal(ranked[0].q, 'Why did people leave?');
+  assert.ok(ranked[0].match && ranked[0].byMeaning && !ranked[1].match);
+});
+
+test('when the call ends it is written up: the whole transcript goes to the model, the summary comes back in pieces', async () => {
+  const getConfig = cfgFor({});
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sum-'));
+  fs.mkdirSync(path.join(dir, 'jd'));
+  fs.writeFileSync(path.join(dir, 'jd', '_note.md'), 'Data engineer. Must know Airflow and SQL.');
+  const kb = new KnowledgeBase(null);
+  kb.setSource(await ingestFolder(dir, { sections: true }));
+  const co = new Copilot({ getConfig: () => ({ ...getConfig(), autoAnswer: 'off' }), llm: new LLM(getConfig), kb, debounceMs: 20 });
+  const events = [];
+  co.on('summary', e => events.push(e));
+  const say = (who, text, ms = 5) => co.finishUtterance(co.openUtterance(who, Date.now() - ms), async () => text, ms, 200);
+
+  // A sound check is not a call: asked for by the app nothing happens, asked for by hand it says why.
+  await say('them', 'Can you hear me?');
+  assert.equal(await co.summarize({ auto: true }), '');
+  assert.deepEqual(events, []);
+  await co.summarize();
+  assert.deepEqual(events.map(e => e.type), ['error']);
+  assert.match(events[0].message, /not enough conversation/);
+  events.length = 0;
+
+  await say('you', 'Yes, I can hear you. Thank you for having me.');
+  await say('them', 'This is a first-round interview for the data engineering role, and the team is five people. How do you run your nightly loads?');
+  await say('you', 'We just run it with Airflow every night and it retries.');
+  await new Promise(r => setTimeout(r, 15));
+  await co.answer({ mode: 'manual' }); // a suggestion made during the call
+  await new Promise(r => setTimeout(r, 15));
+  await say('them', 'Please send us your portfolio link after the call.');
+  // The last words are still being transcribed when listening stops: the summary waits for them.
+  let finish;
+  const last = co.finishUtterance(co.openUtterance('you', Date.now()), () => new Promise(r => { finish = r; }), 5, 0);
+  const before = srv.log.chat.length;
+  const writing = co.summarize({ auto: true });
+  await new Promise(r => setTimeout(r, 250));
+  assert.equal(srv.log.chat.length, before, 'not sent while a line is pending');
+  finish('I will send it today.'); await last;
+  const text = await writing;
+
+  assert.match(text, /^## Overview\n/);
+  assert.equal(co.summary.text, text);
+  assert.equal(events[0].type, 'start');
+  assert.equal(events.at(-1).type, 'done');
+  assert.equal(events.filter(e => e.type === 'delta').map(e => e.text).join('').trim(), text, 'it arrives in pieces');
+  const [system, user] = srv.log.chat.at(-1).messages.map(m => m.content);
+  for (const heading of ['## Overview', '## What was covered', '## What they told me', '## Questions I asked', '## How I did', '## Follow-ups', '## Worth preparing']) assert.ok(system.includes(heading), heading);
+  assert.match(system, /Do not flatter/);
+  assert.match(system, /What I said is in the "Me" lines only/);
+  assert.match(user, /^The call: .*Speech captured: them \d+ s, me \d+ s\./);
+  assert.match(user, /My notes \(background, not part of the call\):[\s\S]*Must know Airflow and SQL/);
+  const lines = user.slice(user.indexOf('Transcript:')).split('\n').filter(l => /^\[/.test(l)).map(l => l.replace(/^\[[^\]]*\] /, '').slice(0, 12));
+  assert.deepEqual(lines, ['Them: Can yo', 'Me: Yes, I c', 'Them: This i', 'Me: We just ', 'Suggested: I', 'Them: Please', 'Me: I will s'], 'both sides and the suggestions, in order');
+
+  // A service that takes little at once gets the end of the call without the notes.
+  const small = await mock.start({ summary: 'too-large' });
+  const cfg2 = () => ({ ...getConfig(), autoAnswer: 'off', llm: { ...getConfig().llm, baseUrl: small.base + '/v1' } });
+  const co2 = new Copilot({ getConfig: cfg2, llm: new LLM(cfg2), kb, debounceMs: 20 });
+  const starts = [];
+  co2.on('summary', e => { if (e.type === 'start') starts.push(!!e.trimmed); });
+  for (let i = 0; i < 120; i++) co2.entries.push({ id: ++co2.seq, who: i % 2 ? 'you' : 'them', text: `Line ${i}: ` + 'words about the pipeline and how it is run. '.repeat(6), t: Date.now() - (120 - i) * 20000, dur: 15000, pending: false });
+  const again = await co2.summarize();
+  const sent = small.log.chat.at(-1).messages[1].content;
+  await small.close();
+  assert.match(again, /^## Overview/);
+  assert.deepEqual(starts, [false, true]);
+  assert.ok(sent.length < 16000 && /Line 119:/.test(sent) && !/Line 0:/.test(sent) && /its opening is left out/.test(sent) && !/My notes/.test(sent));
+
+  // Clearing the meeting clears its summary, and stops one being written.
+  const pending = co.summarize();
+  co.reset();
+  assert.equal(await pending, '');
+  assert.equal(co.summary, null);
 });

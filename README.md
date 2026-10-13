@@ -56,6 +56,7 @@ npm start
 | | |
 |---|---|
 | Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses; with a live speech model their line fills in while they speak, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
+| Summary | When you stop listening, the call is written up from its transcript: an overview, every question they raised and what you answered, what they told you, the questions you asked, how you did (what went well, what was weak and what to say next time, for an interview or other call where you were assessed), follow-ups, and questions worth adding to your prepared answers. One extra request to the chat model per call; "Write it again", "Copy" and "Save summary" are in the Summary tab. Calls of only a few lines are not summarised. Turn it off under Settings > Answers |
 | Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
 | Recording | Optional (Settings > Audio and screen): the meeting's audio, both sides, kept as a .webm file in Documents/Meeting Copilot Recordings. Tell the other side where the law or the meeting's rules require it |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
@@ -208,7 +209,10 @@ out jumbled, and scanned PDFs have no text to read.
 Search is by keywords and, with OpenAI, also by meaning: passages and prepared
 answers are embedded once with `text-embedding-3-small` (same key, a few
 cents for thousands of passages) and each question is embedded when asked, so
-a question worded differently still finds its passage or prepared answer.
+a question worded differently still finds its passage or prepared answer. A
+long question is embedded whole, from the start of their turn, alongside its
+end. The lookup starts the moment the question is heard, during the short wait
+to see whether they carry on, so it adds little or nothing to the answer.
 Other services keep to keywords unless an embedding model is named under
 Settings > More; type `off` there to use keywords only.
 
@@ -227,7 +231,8 @@ time. Files you added are copies, read once when added.
 ## Privacy
 
 - Audio clips, screen text and retrieved passages are sent to the model
-  service you configure. Nothing else leaves your machine. Check that this is
+  service you configure; with the summary on, so is the whole transcript when
+  listening stops. Nothing else leaves your machine. Check that this is
   allowed for the meetings you use it in.
 - Tell the people you are meeting that the call is being transcribed where
   that is required.

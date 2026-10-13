@@ -7,8 +7,25 @@ const { planPinned } = require('./slots');
 
 // Things said to be polite or to fill a pause, which add nothing to a question.
 const COURTESY = /^(?:(?:ok(?:ay)?|right|yeah|yes|yep|sure|so|well|alright|all right|great|cool|good|perfect|thanks|thank you|please|go ahead|take your time|no rush|no pressure|no worries|whenever you(?:'re| are) ready|if you can|if (?:that|it) makes sense|if possible|that(?:'s| is) (?:it|all)|mm+-?hm+|uh-?huh|hm+|um+|uh+|好的?|嗯+|对|是的|可以|行|慢慢来|不急|不着急|谢谢|没问题)[\s,.!，。！、]*)+$/i;
+// Greetings, thanks and sound checks: said by everyone at the start and end of a call, and
+// not an answer to anything. Taken out of what the user said before deciding whether they
+// have taken their turn ("Hello, nice to meet you. Yes, I can hear you." has not).
+const SMALL_TALK = new RegExp('(?:\\b(?:' + [
+  'hello(?: there| everyone| everybody| all)?', 'hi(?: there| everyone| everybody| all)?', 'hey(?: there)?', 'good (?:morning|afternoon|evening|day)',
+  "(?:it(?:'s| is) |it was )?(?:very |so |really )?(?:nice|good|great|lovely|pleased|glad|happy|a pleasure|pleasure) (?:to (?:meet|see|e-?meet|talk to|speak (?:to|with)) you|meeting you)(?: too| as well| again| all)?",
+  '(?:how are you|how do you do|how are things|how is it going|how\'s it going|how have you been)(?: doing)?(?: today)?', '(?:and|how about|what about) you(?:rself)?',
+  "(?:i(?:'m| am)|we(?:'re| are)|doing|all|very|pretty|quite|really)? ?(?:good|fine|great|well|okay|ok|not bad|doing well|doing good|doing great)(?: too| as well)?",
+  'thank(?:s| you)(?: so much| very much| a lot)?(?: for (?:having me|your time|the time|the opportunity|taking the time|joining|inviting me|the invitation|the introduction|asking|that))?(?: today)?',
+  "(?:can|could) you (?:hear|see) (?:me|my screen)(?: okay| ok| clearly| well| now| all right| alright)?", "(?:yes,? ?|yeah,? ?)?i can (?:hear|see) (?:you|your screen|it|that)(?: okay| ok| clearly| well| fine| now| too| loud and clear)?",
+  'you too', 'same here', 'likewise', 'of course', 'no problem', 'sounds good', 'sorry(?: about that)?', 'excuse me', 'pardon(?: me)?',
+  '(?:just |give me )?(?:a|one) (?:moment|second|sec|minute)(?: please)?', 'let me (?:think|see)(?: about (?:that|it))?', "that(?:'s| is) a (?:good|great|interesting) question",
+  'bye(?: bye)?', 'goodbye', 'see you(?: soon| later| then)?', 'take care', 'have a (?:nice|good|great|lovely) (?:day|one|weekend|evening|week|rest of (?:the|your) (?:day|week))',
+  'ok(?:ay)?', 'right', 'yeah', 'yes', 'yep', 'sure', 'so', 'well', 'alright', 'all right', 'cool', 'perfect', 'please', 'mm+-?hm+', 'uh-?huh', 'hm+', 'um+', 'uh+',
+].join('|') + ')\\b|大家好|你好|您好|早上好|上午好|下午好|晚上好|很?(?:高兴|开心|荣幸)(?:认识|见到)(?:你|您|大家)|幸会|(?:非常|很)?(?:谢谢|感谢)(?:你|您|大家)?(?:的时间|的邀请|给我这个机会)?|(?:你|您)?(?:能|可以)?听(?:得)?(?:到|见)(?:我)?(?:吗|了)?|(?:我)?(?:能|可以)听(?:得)?(?:到|见)|不好意思|对不起|没问题|没关系|好的?|嗯+|对|是的|可以|行|再见|拜拜)', 'gi');
 // Words a finished sentence does not end on.
 const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|that|which|is|are|was|were|if|as|so|because|when|where|how|what|your|you|would|could|should)$/i;
+
+const unit = (v) => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; return Array.from(v, x => x / n); };
 
 // Holds the meeting state (transcript, shared-screen text) and produces
 // answer suggestions. No Electron dependencies, so it can be tested in Node.
@@ -16,6 +33,7 @@ const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|th
 // Events:
 //   'transcript' {type:'add'|'update'|'remove', entry:{id,who,text,t,pending}}
 //   'answer'     {type:'start'|'sources'|'delta'|'done'|'error', id, ...}
+//   'summary'    {type:'start'|'delta'|'done'|'error', ...} the write-up of the call, made when it ends
 //   'notice'     {level:'error'|'info', message}
 class Copilot extends EventEmitter {
   // debounceMs: how long after a finished question the answer starts. By then the pause has
@@ -35,18 +53,20 @@ class Copilot extends EventEmitter {
     this.timer = null;
     this.abort = null;
     this.lastError = '';
-    this.lastRun = null;
     this.history = [];   // earlier questions and the answers suggested for them, oldest first
     this.speakingThem = false;
     this.generation = 0;
     this.sttTimeoutMs = 25000;
+    this.summary = null;      // { t, text }: the write-up of this call, once made
+    this.summaryAbort = null;
   }
 
   // Clears the conversation. Screen text is kept: the slide on screen has not changed.
   reset() {
     clearTimeout(this.timer);
     if (this.abort) this.abort.abort();
-    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null; this.history = [];
+    if (this.summaryAbort) this.summaryAbort.abort();
+    this.entries = []; this.lastAnsweredId = 0; this.history = []; this.summary = null;
     this.pendingThem = 0; this.speakingThem = false;
     this.generation = (this.generation || 0) + 1; // segments still being transcribed belong to the old meeting
   }
@@ -141,60 +161,107 @@ class Copilot extends EventEmitter {
 
   setScreenText(text) { this.screenText = String(text || '').trim(); }
 
-  // The other side's most recent run of speech that has not been answered yet.
-  // A brief "yeah" or "mm-hm" from the user does not break the run; a real reply does.
-  _latestThemRun() {
+  // Whether something the microphone picked up is the user taking their turn: a real
+  // reply, not a "yeah" or "mm-hm", not a greeting ("Hello, nice to meet you."), and not said
+  // over the other side (their voice from the speakers, or a word of agreement while they talk).
+  _isOwnTurn(you) {
+    // Four words of substance once greetings and the like are set aside (Chinese: eight characters).
+    const said = you.text.replace(SMALL_TALK, ' ');
+    const cjk = (said.match(/[\u4e00-\u9fff]/g) || []).length;
+    if (tokenize(said.replace(/[\u4e00-\u9fff]/g, ' ')).length + Math.floor(cjk / 2) < 4) return false;
+    const start = you.t, end = you.t + (you.dur || 0);
+    if (end <= start) return true;
+    let over = 0;
+    for (const e of this.entries) {
+      if (e.who !== 'them' || e.pending) continue;
+      over += Math.max(0, Math.min(end, e.t + (e.dur || 0)) - Math.max(start, e.t));
+    }
+    return over / (end - start) < 0.6;
+  }
+
+  // Their turn: everything the other side has said since the user last spoke, however long
+  // and in however many pieces. That is the question, with its set-up; at the start of a
+  // meeting, before the user has said anything, it is what they have said so far.
+  // Bounded only against a silent or missing microphone: a gap of two minutes starts a new
+  // turn, and at most about five minutes of talk is taken.
+  // -> { run: its pieces in order, fresh: those not yet answered, answeredEnd: when the answered part ended (0 if none) }
+  _theirTurn() {
     const run = [];
+    let chars = 0;
     for (let i = this.entries.length - 1; i >= 0; i--) {
       const e = this.entries[i];
       if (e.pending) continue;
-      if (e.who === 'you') { if (tokenize(e.text).length < 4) continue; break; }
-      if (e.id <= this.lastAnsweredId) break;
-      if (run.length && run[0].t - e.t > 30000) break;
-      run.unshift(e);
-      if (run.length >= 8) break; // a long question arrives in several pieces
+      if (e.who === 'you') { if (this._isOwnTurn(e)) break; continue; }
+      if (run.length && run[0].t - (e.t + (e.dur || 0)) > 120000) break;
+      run.unshift(e); chars += e.text.length;
+      if (chars > 5000 || run.length >= 60) break;
     }
-    return run;
+    const fresh = run.filter(e => e.id > this.lastAnsweredId);
+    const answered = run.filter(e => e.id <= this.lastAnsweredId);
+    const lastAnswered = answered[answered.length - 1];
+    return { run, fresh, answeredEnd: lastAnswered ? lastAnswered.t + (lastAnswered.dur || 0) : 0 };
   }
 
-  // If they carry on right after an answer was started, the new words belong to the same
-  // question: answer the whole thing rather than the tail on its own.
-  _withContinuation(run) {
-    const prev = this.lastRun;
-    const joined = prev && run.length && run[0].t - prev.end < 6000 && Date.now() - prev.at < 20000;
-    const text = (joined ? prev.text + ' ' : '') + run.map(e => e.text).join(' ');
-    const last = run[run.length - 1];
-    this.lastRun = { text, end: last.t + last.dur, at: Date.now() };
-    return text;
+  // What to search the user's material with for something they said.
+  //   query: the words to look up. A long turn is searched by its end, where the question
+  //   is; the set-up before it would pull in passages about everything mentioned on the way.
+  //   A question too thin to search on gets a little of what came before it.
+  //   whole: for search by meaning, the turn from its start as well (when it is longer than
+  //   the query), so the set-up counts there too.
+  _searchTexts(asked) {
+    if (tokenize(asked).length < 4) {
+      const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).filter(e => !asked.includes(e.text)).map(e => e.text).join(' ');
+      return { query: prev ? `${asked} ${prev}` : asked, whole: '' };
+    }
+    if (asked.length <= 700) return { query: asked, whole: '' };
+    return { query: asked.slice(-700).replace(/^\S*\s/, ''), whole: asked.slice(-4000) };
+  }
+
+  // The meaning of some texts as vectors, or null when search by meaning is off or the
+  // lookup fails. The last lookup is kept: it is started as soon as a question is heard,
+  // while the app still waits to see whether they carry on, and the answer picks it up.
+  _embed(texts) {
+    if (!this.llm.embedConfigured() || !this.kb.stats().embedded) return Promise.resolve(null);
+    const key = texts.join('\n\u0000\n');
+    if (this._vecs && this._vecs.key === key) return this._vecs.promise;
+    const promise = this.llm.embed(texts, { signal: AbortSignal.timeout(3000) }).catch(() => {
+      if (this._vecs && this._vecs.promise === promise) this._vecs = null; // a failure is not remembered
+      return null;
+    });
+    this._vecs = { key, promise };
+    return promise;
   }
 
   _maybeAutoAnswer() {
     if (this.getConfig().autoAnswer !== 'questions' || this.pendingThem > 0 || this.speakingThem) return;
-    const run = this._latestThemRun();
-    if (!run.length) return;
-    const prev = this.lastRun;
-    const context = prev && run[0].t - prev.end < 6000 ? prev.text + ' ' : '';
-    const said = run.map(e => e.text).join(' ');
-    if (!detectQuestion(context + said).ask) return;
+    const { run, fresh, answeredEnd } = this._theirTurn();
+    if (!fresh.length) return;
+    const said = fresh.map(e => e.text).join(' ');
+    // Carrying straight on from what was already answered, the new words belong to that
+    // question and the whole turn decides. After a longer gap they have to ask something
+    // themselves: a remark added later ("We are a team of five.") does not restart the answer.
+    const carriesOn = answeredEnd > 0 && fresh[0].t - answeredEnd < 6000;
+    if (!detectQuestion(carriesOn || !answeredEnd ? run.map(e => e.text).join(' ') : said).ask) return;
     // Words of courtesy tacked on after the question was already taken up ("Take your time.",
     // "Right, okay.") are not a reason to start the answer over. Anything else is, however
     // short: "In SQL." changes what the answer should be.
-    if (context && COURTESY.test(said.trim())) {
-      const last = run[run.length - 1];
-      this.lastAnsweredId = last.id;
-      this.lastRun = { ...prev, end: last.t + last.dur };
+    if (carriesOn && COURTESY.test(said.trim())) {
+      this.lastAnsweredId = fresh[fresh.length - 1].id;
       return;
     }
     clearTimeout(this.timer);
+    // The lookup of what they mean starts now and runs during the wait below.
+    const texts = this._searchTexts(run.map(e => e.text).join(' '));
+    this._embed(texts.whole ? [texts.query, texts.whole] : [texts.query]).catch(() => {});
     // A sentence that trails off ("How would you handle a pipeline that ...") is probably
     // not finished: wait longer before answering, so the answer is not started twice.
     // (Chinese is often written down without a closing mark, so there only an explicit
     // trailing-off counts.)
-    const cjk = /[\u4E00-\u9FFF]/.test(said);
+    const cjk = /[一-鿿]/.test(said);
     const trailsOff = /(\.\.\.|…|,|，)\s*$/.test(said) || (!cjk && (!/[.?!]["”')]?\s*$/.test(said) || TRAILING_WORD.test(said.replace(/[.\s]+$/, ''))));
     this.timer = setTimeout(() => {
       if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
-      if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
+      if (this._theirTurn().fresh.length) this.answer({ mode: 'auto' }).catch(() => {});
     }, trailsOff ? this.trailMs : this.debounceMs);
   }
 
@@ -215,9 +282,10 @@ class Copilot extends EventEmitter {
 
     let asked = question.trim();
     if (mode === 'auto' || mode === 'manual') {
-      let run = this._latestThemRun();
+      // The question is their whole turn: all they have said since the user last spoke.
+      let { run } = this._theirTurn();
       if (!run.length && mode === 'manual') {
-        // Nothing new: answer the last thing they said again.
+        // The user has spoken since: answer the last thing they said again.
         const last = [...this.entries].reverse().find(e => e.who === 'them' && !e.pending);
         if (last) run = [last];
       }
@@ -225,7 +293,7 @@ class Copilot extends EventEmitter {
         this.emit('answer', { type: 'error', id, message: 'Nothing from the other side to answer yet.' });
         return '';
       }
-      asked = this._withContinuation(run);
+      asked = run.map(e => e.text).join(' ');
       this.lastAnsweredId = run[run.length - 1].id;
       const last = run[run.length - 1];
       spoken = { end: last.ended || last.t + last.dur, heard: last.heard || Date.now() };
@@ -245,22 +313,19 @@ class Copilot extends EventEmitter {
     this.emit('answer', { type: 'start', id, question: mode === 'screen' ? question.trim() : asked, mode });
 
     try {
-      // Retrieval: the question, plus a little context when the question alone is too thin to search on.
-      let query = asked;
-      if (mode === 'screen') query = `${question} ${this.screenText.slice(0, 500)}`;
+      // Retrieval: see _searchTexts.
+      let { query, whole } = this._searchTexts(asked);
+      if (mode === 'screen') { query = `${question} ${this.screenText.slice(0, 500)}`; whole = ''; }
       else if (mode === 'typed' && tokenize(asked).length < 5 && this.history.length) {
-        query = `${asked} ${this.history[this.history.length - 1].question}`;
-      } else if (tokenize(asked).length < 4) {
-        const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).map(e => e.text).join(' ');
-        query = `${asked} ${prev}`;
+        query = `${asked} ${this.history[this.history.length - 1].question}`; whole = '';
       }
-      const [{ hits: local, vec }, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
+      const [{ hits: local, vecs }, live] = await Promise.all([this._searchKb(query, whole), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
       // Answers prepared in advance go to the model in their own block, closest first: those
       // the search found for this question, then by how alike the questions are (in meaning
       // when search by meaning is on, in wording otherwise).
       const found = new Set(local.filter(r => r.qa).map(r => r.qa.q));
-      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query, vec)
+      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query, vecs)
         .map(p => ({ ...p, found: found.has(p.q) }))
         .sort((a, b) => ((b.match ? 2 : 0) + (b.found ? 1 : 0)) - ((a.match ? 2 : 0) + (a.found ? 1 : 0)));
       const refs = [...live, ...local.filter(r => !r.qa)].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
@@ -296,7 +361,7 @@ class Copilot extends EventEmitter {
       // there to starting (waiting to see whether they carry on), and from there to the first
       // words (search and the model).
       const timing = spoken && firstWords ? { heard: spoken.heard - spoken.end, wait: begun - spoken.heard, first: firstWords - begun } : null;
-      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim(), ...(timing ? { timing } : {}) });
+      this.history.push({ t: Date.now(), begun, mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim(), ...(timing ? { timing } : {}) });
       if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
@@ -309,15 +374,20 @@ class Copilot extends EventEmitter {
     }
   }
 
-  async _searchKb(query, signal) {
+  // -> { hits, vecs }: vecs are the meaning of the query and, for a long turn, of the whole
+  // turn (null without search by meaning). Passages are found by the two together, the end
+  // of the turn counting twice because it is in both.
+  async _searchKb(query, whole = '') {
+    let timer;
+    // A slow lookup is not worth holding the answer for: keywords still search.
+    const vecs = await Promise.race([this._embed(whole ? [query, whole] : [query]), new Promise(resolve => { timer = setTimeout(resolve, 700, null); })]);
+    clearTimeout(timer);
     let vec = null;
-    if (this.llm.embedConfigured() && this.kb.stats().embedded) {
-      try {
-        const t = AbortSignal.timeout(700); // a slow lookup is not worth holding the answer for: keywords still search
-        vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
-      } catch { /* fall back to keyword search */ }
+    if (vecs && vecs.length) {
+      const units = vecs.map(unit);
+      vec = units[0].map((x, i) => units.reduce((sum, u) => sum + (u[i] || 0), 0));
     }
-    return { hits: this.kb.search(query, 8, vec), vec };
+    return { hits: this.kb.search(query, 8, vec), vecs: vecs && vecs.length ? vecs : null };
   }
 
   async _searchLive(query, cfg) {
@@ -407,7 +477,111 @@ class Copilot extends EventEmitter {
     } else parts.push('Reference material: none found for this question.');
     parts.push(mode === 'screen'
       ? `What I need: ${asked}\nBase the reply on the shared-screen text above. It is raw OCR of the whole screen, so ignore menus, toolbars, participant names and other clutter, and repair obvious OCR slips in names and code.`
-      : mode === 'typed' ? `My question: ${asked}` : `They just said: "${asked}"\nWrite what I should say.`);
+      : mode === 'typed' ? `My question: ${asked}`
+        : asked.length > 400 ? `Everything they have said since I last spoke (the question is usually at the end; what comes before sets it up, and every part of it counts):\n"${asked}"\nWrite what I should say.`
+          : `They just said: "${asked}"\nWrite what I should say.`);
+    return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
+  }
+
+  // ---- the write-up of the call ------------------------------------------------------
+  // Whether enough was said for a summary to be worth writing: a real exchange, not a sound check.
+  worthSummarising() {
+    const said = this.entries.filter(e => !e.pending);
+    return said.length >= 4 && said.reduce((n, e) => n + e.text.length, 0) >= 300;
+  }
+
+  // Writes a detailed account of the whole call from its transcript: what was covered, what
+  // they said, how the user did, what to follow up. Made when listening stops, or on request.
+  // auto: started by the app, so a call too short to summarise is passed over without a word.
+  async summarize({ auto = false } = {}) {
+    if (this.summaryAbort) this.summaryAbort.abort();
+    const ctl = new AbortController();
+    this.summaryAbort = ctl;
+    const generation = this.generation || 0;
+    try {
+      // The last words are often still being transcribed when listening stops.
+      for (let i = 0; i < 80 && this.entries.some(e => e.pending) && !ctl.signal.aborted; i++) await new Promise(r => setTimeout(r, 100));
+      if (ctl.signal.aborted || generation !== (this.generation || 0)) return '';
+      if (!this.worthSummarising()) {
+        if (!auto) this.emit('summary', { type: 'error', message: 'There is not enough conversation to summarise yet.' });
+        return '';
+      }
+      this.emit('summary', { type: 'start' });
+      const cfg = this.getConfig();
+      const send = (lean) => this.llm.chatStream(this._summaryMessages({ lean }), {
+        signal: ctl.signal, maxTokens: 4000, // room for a long call and for reasoning models
+        onDelta: (piece) => this.emit('summary', { type: 'delta', text: piece }),
+      });
+      let text;
+      try { text = await send(cfg.answerContext === 'lean'); } catch (e) {
+        // More than the service takes in one request: the end of the call, without the notes.
+        if (cfg.answerContext === 'lean' || ctl.signal.aborted || !/too large|tokens per minute|\bTPM\b|context length|maximum context|request_too_large/i.test(e.message)) throw e;
+        this.emit('summary', { type: 'start', trimmed: true });
+        text = await send(true);
+      }
+      if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
+      this.summary = { t: Date.now(), text: text.trim() };
+      this.emit('summary', { type: 'done', text: this.summary.text, t: this.summary.t });
+      return this.summary.text;
+    } catch (e) {
+      if (!ctl.signal.aborted) this.emit('summary', { type: 'error', message: e.message });
+      return '';
+    } finally {
+      if (this.summaryAbort === ctl) this.summaryAbort = null;
+    }
+  }
+
+  // lean: for services that take little at once: the last part of the call, without the notes.
+  _summaryMessages({ lean = false } = {}) {
+    const system = [
+      'You write the user\'s own record of a call that has just ended, from its transcript. "Me" is the user; "Them" is the other side (one person or several: the transcript does not tell them apart, so name a speaker only when the words make it clear). The user reads this afterwards to remember what happened, to judge how it went and to prepare for what comes next. Be complete, specific and honest.',
+      'Write these sections in this order, each under a "## " heading with exactly this name. Leave a section out when the call has nothing for it.',
+      '## Overview',
+      'Three to five sentences: what kind of call it was, who it was with (names and roles only if they were said), what it was for, how long it ran, and how it ended, including any outcome or next step that was stated.',
+      '## What was covered',
+      'In the order of the call, one bullet for every question or topic the other side raised, none left out: the question or topic in a few words in bold, then what I answered (the substance and the specifics I gave: examples, numbers, tools), then how they reacted if they did.',
+      '## What they told me',
+      'Every fact the other side gave that I may need later, one bullet each: the role and its duties, the team and who is on it, the company, tools, expectations, the process and its stages, dates, pay or terms, anything they said about what they are looking for.',
+      '## Questions I asked',
+      'Each question I put to them and what they answered.',
+      '## How I did',
+      'Only when I was being assessed or was presenting (an interview, a pitch, a review, a demo). First "Went well:", then the strongest moments, each with what I said that made it work. Then "Weak:", then each answer that was thin, vague, rambling, off the question, contradicted something else I said, or missed what they were plainly looking for: name the question, quote a few of my words, and say in one sentence what was wrong. After each weak point add a line starting "Better:" giving what to say next time in one or two sentences, built on my notes when they cover it. Be direct. Do not flatter, do not soften a weak answer, and do not invent a weakness to fill the section. If the transcript holds little of what I said, state that my side was not captured and cannot be judged, and judge nothing.',
+      '## Follow-ups',
+      'What I said I would do or send, what they said they would do, and dates or deadlines, one bullet each, marked "Me:" or "Them:".',
+      '## Worth preparing',
+      'Questions from this call that I answered thinly or that are likely to be asked again elsewhere, worded as they were asked, one bullet each, so I can add them to my prepared answers.',
+      'Rules:',
+      '- Use only what the transcript supports. Never invent a name, number, date, outcome or reaction. Where the transcript is unclear, say so ("unclear in the transcript") rather than guess.',
+      '- The transcript comes from speech recognition: read through obvious mis-hearings, and do not count a mis-heard word against me.',
+      '- Lines marked "Suggested" are answers this app proposed on screen during the call. I may have said them, said something else, or said nothing. What I said is in the "Me" lines only: describe and judge my answers from those, never from a suggestion.',
+      '- My notes, when given, are background: who I am and what the call was for (a job description describes what the other side wants, not what I have done). Use them to understand the call and for the "Better:" lines, not as things that were said.',
+      '- Plain text: "## " headings as above, "- " bullets, bold (**like this**) only for the few words that open a bullet. No tables, no code blocks, no preamble before the first heading and no closing remarks after the last section.',
+      '- Write in the language most of the call was held in. Length follows the call: every question and fact is kept, in few words each; an hour-long interview usually needs 600 to 1,000 words.',
+    ].join('\n');
+
+    const said = this.entries.filter(e => !e.pending);
+    const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    // A suggestion sits where it was asked for, straight after the words it answers.
+    const items = [
+      ...said.map(e => ({ t: e.t, text: `[${clock(e.t)}] ${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}` })),
+      ...this.history.filter(h => h.mode !== 'typed').map(h => ({ t: h.begun || h.t || 0, text: `[${clock(h.begun || h.t || Date.now())}] Suggested${h.mode === 'screen' ? ' (from the shared screen)' : ''}: ${h.answer.replace(/\s*\n\s*/g, ' ').slice(0, lean ? 200 : 500)}` })),
+    ].sort((a, b) => a.t - b.t).map(x => x.text);
+    // As much of the call as fits, counted from its end; a very long call loses its opening minutes.
+    let room = lean ? 14000 : 150000, from = items.length;
+    while (from > 0 && items[from - 1].length <= room) { room -= items[--from].length; }
+    const cut = from > 0;
+    const span = (ms) => { const m = Math.round(ms / 60000); return m >= 1 ? `${m} min` : `${Math.max(1, Math.round(ms / 1000))} s`; };
+    const talk = (who) => span(said.filter(e => e.who === who).reduce((n, e) => n + (e.dur || 0), 0));
+    const first = said[0], last = said[said.length - 1];
+    const facts = `The call: ${new Date(first.t).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${clock(first.t)} to ${clock(last.t + (last.dur || 0))} (${span(last.t + (last.dur || 0) - first.t)}). Speech captured: them ${talk('them')}, me ${talk('you')}.`;
+    const parts = [facts];
+    if (!lean) {
+      const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], { total: 12000, perNote: 4000 })
+        .filter(n => n.sent > 0).map(n => `### ${n.title}\n${n.text.slice(0, n.sent)}`);
+      if (notes.length) parts.push(`My notes (background, not part of the call):\n${notes.join('\n\n')}`);
+    }
+    parts.push(`Transcript${cut ? ' (the call was longer than fits; its opening is left out, so say in the overview that the summary starts part-way in)' : ''}:\n${items.slice(from).join('\n')}`);
+    parts.push('Write the record of this call.');
     return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
   }
 
