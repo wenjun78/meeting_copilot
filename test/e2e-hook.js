@@ -238,6 +238,20 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=settings]').click()`);
     await new Promise(r => setTimeout(r, 300));
     await shot('3-settings');
+    // Light theme: applied at once from Settings, kept in the saved settings, and back to dark.
+    const bg = () => js(`getComputedStyle(document.body).backgroundColor`);
+    const darkBg = await bg();
+    await js(`(() => { const t = document.getElementById('s-theme'); t.value = 'light'; t.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await waitFor('light theme saved', async () => config.get().ui.theme === 'light');
+    const lightBg = await bg();
+    await js(`document.querySelector('[data-tab=transcript]').click()`);
+    await new Promise(r => setTimeout(r, 250));
+    await shot('3c-light-theme');
+    await js(`document.querySelector('[data-tab=settings]').click()`);
+    await js(`(() => { const t = document.getElementById('s-theme'); t.value = 'dark'; t.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await waitFor('dark theme saved', async () => config.get().ui.theme === 'dark');
+    step('theme', { darkBg, lightBg, backTo: await bg() });
+    if (darkBg === lightBg || (await bg()) !== darkBg || !/rgb\(24\d, 24\d, 24\d\)/.test(lightBg)) throw new Error('the light theme did not apply');
     const press = (id, init) => js(`document.getElementById('${id}').dispatchEvent(new KeyboardEvent('keydown', Object.assign({ bubbles: true, cancelable: true }, ${JSON.stringify(init)})))`);
     await js(`document.getElementById('s-key-answer').scrollIntoView({ block: 'center' })`);
     await press('s-key-answer', { key: ' ', code: 'Space', ctrlKey: true, shiftKey: true });
@@ -245,7 +259,7 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('recorder flags a Teams clash', { field: await js(`document.getElementById('s-key-answer').value`), hint: await js(`document.getElementById('keyHint').textContent`) });
     await new Promise(r => setTimeout(r, 200));
     await shot('3b-shortcut-clash');
-    await press('s-key-answer', { key: ',', code: 'Comma', ctrlKey: true, altKey: true });
+    await press('s-key-answer', { key: 'x', code: 'KeyX', altKey: true });
     await waitFor('free combination', () => js(`/is free/.test(document.getElementById('keyHint').textContent)`));
     step('recorder accepts the default', { field: await js(`document.getElementById('s-key-answer').value`), hint: await js(`document.getElementById('keyHint').textContent`) });
     await js(`document.querySelector('[data-tab=transcript]').click()`);
@@ -299,11 +313,16 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await shot('5-answer');
 
     // Shortcuts: registered under their default keys, and the screen shortcut reads the screen and answers with code.
-    const keys = ['CommandOrControl+Alt+,', 'CommandOrControl+Alt+.', 'CommandOrControl+Alt+/'];
-    step('shortcuts', { registered: keys.map(k => globalShortcut.isRegistered(k)), buttonTitles: await js(`[document.getElementById('answerNow').title, document.getElementById('answerScreen').title]`) });
+    const keys = ['Alt+X', 'Alt+B', 'CommandOrControl+Alt+/'];
+    const shortcutStep = { registered: keys.map(k => globalShortcut.isRegistered(k)), buttonTitles: await js(`[document.getElementById('answerNow').title, document.getElementById('answerScreen').title]`), shownOnButtons: await js(`[document.getElementById('keyAnswer').textContent, document.getElementById('keyScreen').textContent]`), active: await js(`[document.getElementById('answerNow').getAttribute('aria-pressed'), document.getElementById('answerScreen').getAttribute('aria-pressed')]`) };
+    step('shortcuts', shortcutStep);
+    // Both shortcuts are registered and printed on their buttons; the answer on the card came from what they said, so that button is the filled one.
+    if (shortcutStep.registered.includes(false) || shortcutStep.shownOnButtons.join() !== 'Alt+X,Alt+B' || shortcutStep.active.join() !== 'true,false') throw new Error('shortcuts or the active-mode highlight are not as expected');
     step('fresh read on demand', { read: await js(`window.capture.refreshScreen()`) });
     runShortcut('screen');
     await waitFor('code answer', () => js(`!!document.querySelector('#card pre code') && !document.getElementById('copy').hidden`));
+    const activeAfterScreen = await js(`[document.getElementById('answerNow').getAttribute('aria-pressed'), document.getElementById('answerScreen').getAttribute('aria-pressed')]`);
+    if (activeAfterScreen.join() !== 'false,true') throw new Error('the screen button is not shown as the active one after a screen answer');
     step('screen answer', { asked: await js(`document.getElementById('asked').textContent`), code: await js(`document.querySelector('#card pre code').textContent`), lang: await js(`document.querySelector('#card pre').dataset.lang`), rest: await js(`[...document.querySelectorAll('#card > p, #card li')].map(n => n.textContent)`) });
     await shot('5b-screen-answer');
     runShortcut('toggle'); await new Promise(r => setTimeout(r, 300));

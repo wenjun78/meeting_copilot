@@ -414,6 +414,17 @@ test('a stalled answer stream is abandoned', async () => {
 test('default shortcuts do not collide with Teams, Zoom, Meet or Webex; known clashes are named', () => {
   for (const accel of Object.values(shortcuts.DEFAULTS)) assert.equal(shortcuts.problem(accel), '', accel);
   assert.equal(new Set(Object.values(shortcuts.DEFAULTS)).size, 3);
+  // The two pressed during a call are two keys each, bound by no meeting app or browser.
+  assert.deepEqual([shortcuts.DEFAULTS.answer, shortcuts.DEFAULTS.screen], ['Alt+X', 'Alt+B']);
+  assert.match(shortcuts.problem('Ctrl+J'), /Chrome, Edge or Firefox/);
+  assert.match(shortcuts.problem('Alt+D'), /Chrome, Edge or Firefox/);
+  // Settings still holding the old defaults move to the new ones; a combination the user chose stays.
+  {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'keys-')), 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ defaults: 2, shortcuts: { answer: 'CommandOrControl+Alt+,', screen: 'CommandOrControl+Shift+9', toggle: 'CommandOrControl+Alt+/' } }));
+    const got = new ConfigStore(file).load().shortcuts;
+    assert.deepEqual(got, { answer: 'Alt+X', screen: 'CommandOrControl+Shift+9', toggle: 'CommandOrControl+Alt+/' });
+  }
   assert.match(shortcuts.problem('CommandOrControl+Shift+Space'), /Microsoft Teams/);   // Teams: go to sharing toolbar
   assert.match(shortcuts.problem('CommandOrControl+Shift+Enter'), /Microsoft Teams/);   // Teams: reset pane width
   assert.match(shortcuts.problem('Alt+A'), /Zoom/);                                      // Zoom: mute

@@ -41,8 +41,8 @@
     <article class="card" id="card" aria-live="polite"></article>
     <div class="sources" id="sources" hidden></div>
     <div class="cue-actions">
-      <button id="answerNow" class="btn">Answer what they said</button>
-      <button id="answerScreen" class="btn">Answer from the screen</button>
+      <button id="answerNow" class="btn mode" aria-pressed="false"><span>Answer what they said</span><kbd id="keyAnswer"></kbd></button>
+      <button id="answerScreen" class="btn mode" aria-pressed="false"><span>Answer from the screen</span><kbd id="keyScreen"></kbd></button>
       <button id="copy" class="btn quiet" hidden>Copy</button>
     </div>
     <form id="askForm" class="ask">
@@ -179,6 +179,10 @@
           <label class="check"><input id="s-auto" type="checkbox"> Answer automatically when they ask a question</label>
           <label>How much is sent with each answer <select id="s-context"><option value="full">Full: all your notes and the best matches</option><option value="lean">Lean: a smaller request, for free plans with tight limits</option></select></label>
           <label>Length <select id="s-length"><option value="short">Short: say it in 20 seconds</option><option value="detailed">Detailed: more supporting points</option></select></label>
+        </fieldset>
+        <fieldset>
+          <legend>Appearance</legend>
+          <label>Theme <select id="s-theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
         </fieldset>
         <fieldset>
           <legend>Shortcuts</legend>

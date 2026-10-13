@@ -44,7 +44,7 @@ function createWindow() {
     ? saved : { width: 440, height: Math.min(680, area.height - 80), x: area.x + area.width - 460, y: area.y + 40 };
   win = new BrowserWindow({
     ...bounds, minWidth: 360, minHeight: 150,
-    frame: false, show: false, backgroundColor: '#1B2530', title: 'Meeting Copilot',
+    frame: false, show: false, backgroundColor: config.get().ui.theme === 'light' ? '#F3F5F7' : '#1B2530', title: 'Meeting Copilot',
     alwaysOnTop: true, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });

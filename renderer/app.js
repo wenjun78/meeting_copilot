@@ -88,6 +88,9 @@ function renderIdle() {
 
 function renderAnswer() {
   const a = state.answer, card = $('card');
+  // Which of the two the answer on the card came from (an automatic answer is to what they said).
+  $('answerNow').setAttribute('aria-pressed', String(a.status !== 'idle' && (a.mode === 'auto' || a.mode === 'manual')));
+  $('answerScreen').setAttribute('aria-pressed', String(a.status !== 'idle' && a.mode === 'screen'));
   if (a.status === 'idle') return renderIdle();
   $('asked').hidden = !a.question && a.mode !== 'screen';
   $('asked').textContent = a.mode === 'typed' ? `You asked: ${a.question}`
@@ -700,6 +703,8 @@ function fillSettings() {
   $('kbAuto').checked = c.autoSync !== false;
   $('s-context').value = c.answerContext === 'lean' ? 'lean' : 'full';
   $('onTop').setAttribute('aria-pressed', String(c.ui.onTop !== false));
+  $('s-theme').value = c.ui.theme === 'light' ? 'light' : 'dark';
+  applyTheme(c.ui.theme);
   $('s-update').checked = c.autoUpdate !== false;
   for (const [action, id] of SHORTCUT_FIELDS) setShortcutField($(id), c.shortcuts[action] || '', state.labels[action] || '');
   applyShortcutLabels();
@@ -755,7 +760,7 @@ async function checkShortcutField(input) {
   const r = await call('shortcuts:check', input.dataset.accel);
   input.value = r.label || input.dataset.accel;
   const twin = SHORTCUT_FIELDS.map(([, id]) => $(id)).find(o => o !== input && o.dataset.accel === input.dataset.accel);
-  hint.textContent = twin ? `${r.label} is set twice. Each action needs its own keys.` : r.problem ? `${r.label}: ${r.problem} Pick something else.` : `${r.label} is free in Teams, Zoom, Meet and Webex.`;
+  hint.textContent = twin ? `${r.label} is set twice. Each action needs its own keys.` : r.problem ? `${r.label}: ${r.problem} Pick something else.` : `${r.label} is free in Teams, Zoom, Meet, Webex and the browsers.`;
   hint.classList.toggle('warn', !!(twin || r.problem));
 }
 for (const [, id] of SHORTCUT_FIELDS) {
@@ -781,6 +786,7 @@ for (const [, id] of SHORTCUT_FIELDS) {
 function applyShortcutLabels() {
   const l = state.labels || {};
   $('answerNow').title = l.answer || ''; $('answerScreen').title = l.screen || '';
+  $('keyAnswer').textContent = l.answer || ''; $('keyScreen').textContent = l.screen || '';
 }
 
 $('settings').addEventListener('submit', async (e) => {
@@ -817,6 +823,12 @@ $('settings').addEventListener('submit', async (e) => {
   } catch (err) { fail(err); }
 });
 $('recFolder').addEventListener('click', () => call('rec:openFolder').catch(fail));
+// Theme: applied as soon as it is chosen.
+function applyTheme(theme) { document.documentElement.classList.toggle('light', theme === 'light'); }
+$('s-theme').addEventListener('change', async () => {
+  applyTheme($('s-theme').value);
+  try { const r = await call('config:set', { ui: { theme: $('s-theme').value } }); state.cfg = r.config; } catch (e) { fail(e); }
+});
 // Window opacity, in the title bar: applied as the slider moves.
 $('opacity').addEventListener('input', () => call('config:set', { ui: { opacity: Number($('opacity').value) } }).catch(() => {}));
 

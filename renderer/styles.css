@@ -13,9 +13,32 @@
   --them: #f0b55a;
   --you: #86cfc6;
   --alert: #ef6b5e;
+  --fill: #f0b55a;      /* filled controls: the main button, the selected section */
+  --on-fill: #17222b;
   --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --read: "Sitka Text", Charter, "Bitstream Charter", "Iowan Old Style", Cambria, Georgia, serif;
 }
+/* Light: the same layout on a pale shell, for bright rooms and for telling the app apart
+   from dark meeting windows. Accent colours are darkened so they read on white. */
+:root.light {
+  --shell: #f3f5f7;
+  --shell-2: #e8ecf0;
+  --shell-3: #dbe1e7;
+  --rule: #c3ccd5;
+  --text: #17222b;
+  --muted: #586874;
+  --card: #ffffff;
+  --ink: #17222b;
+  --ink-soft: #4a5a66;
+  --them: #8f5200;
+  --you: #0f6f66;
+  --alert: #c5352a;
+}
+:root.light .card:not(.idle) { border: 1px solid var(--rule); box-shadow: 0 1px 3px rgba(23, 34, 43, 0.08); }
+:root.light .card pre { background: #1e2a35; }
+:root.light .toast { box-shadow: 0 6px 18px rgba(23, 34, 43, 0.18); }
+:root.light input::placeholder, :root.light textarea::placeholder { color: #7d8b97; }
+:root.light .meter.them b { background: var(--fill); }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
@@ -59,7 +82,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .btn:hover { border-color: var(--muted); }
 .btn:disabled { opacity: 0.5; cursor: default; }
-.btn.primary { background: var(--them); border-color: var(--them); color: var(--ink); font-weight: 600; }
+.btn.primary { background: var(--fill); border-color: var(--fill); color: var(--on-fill); font-weight: 600; }
 .btn.primary:hover { filter: brightness(1.06); }
 .listening #toggle { background: transparent; color: var(--text); border-color: var(--alert); }
 .btn.quiet { background: transparent; color: var(--muted); }
@@ -127,6 +150,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .source:hover { border-color: var(--muted); color: var(--text); }
 .cue-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; }
 .cue-actions #copy { margin-left: auto; }
+/* The two ways to ask for an answer. The one the answer on the card came from is filled, so
+   it is plain at a glance which was used; each shows its shortcut. */
+.btn.mode { display: inline-flex; align-items: center; gap: 8px; }
+.btn.mode kbd { font: 600 11px/1 var(--ui); padding: 3px 5px; border-radius: 4px; border: 1px solid var(--rule); color: var(--muted); background: transparent; white-space: nowrap; }
+.btn.mode kbd:empty { display: none; }
+.btn.mode[aria-pressed="true"] { background: var(--fill); border-color: var(--fill); color: var(--on-fill); font-weight: 600; }
+.btn.mode[aria-pressed="true"] kbd { color: var(--on-fill); border-color: rgba(23, 34, 43, 0.35); }
 .ask, .row { display: flex; gap: 6px; flex: none; }
 input[type="text"], input[type="password"], textarea, select {
   width: 100%; min-width: 0; background: var(--shell-2); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 9px; user-select: text;
@@ -168,7 +198,7 @@ input.keys:focus { border-color: var(--them); }
 .seg { display: flex; flex-wrap: wrap; gap: 3px; flex: none; }
 .seg button { border: 1px solid var(--rule); background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 8px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
 .seg button:hover { color: var(--text); border-color: var(--muted); }
-.seg button[aria-selected="true"] { background: var(--them); border-color: var(--them); color: var(--ink); font-weight: 600; }
+.seg button[aria-selected="true"] { background: var(--fill); border-color: var(--fill); color: var(--on-fill); font-weight: 600; }
 .slot { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .slot-what { margin: 0; color: var(--muted); }
 .slot h3 { margin: 8px 0 0; font-size: 13px; font-weight: 600; }
