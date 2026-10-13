@@ -7,8 +7,25 @@ const { planPinned } = require('./slots');
 
 // Things said to be polite or to fill a pause, which add nothing to a question.
 const COURTESY = /^(?:(?:ok(?:ay)?|right|yeah|yes|yep|sure|so|well|alright|all right|great|cool|good|perfect|thanks|thank you|please|go ahead|take your time|no rush|no pressure|no worries|whenever you(?:'re| are) ready|if you can|if (?:that|it) makes sense|if possible|that(?:'s| is) (?:it|all)|mm+-?hm+|uh-?huh|hm+|um+|uh+|好的?|嗯+|对|是的|可以|行|慢慢来|不急|不着急|谢谢|没问题)[\s,.!，。！、]*)+$/i;
+// Greetings, thanks and sound checks: said by everyone at the start and end of a call, and
+// not an answer to anything. Taken out of what the user said before deciding whether they
+// have taken their turn ("Hello, nice to meet you. Yes, I can hear you." has not).
+const SMALL_TALK = new RegExp('(?:\\b(?:' + [
+  'hello(?: there| everyone| everybody| all)?', 'hi(?: there| everyone| everybody| all)?', 'hey(?: there)?', 'good (?:morning|afternoon|evening|day)',
+  "(?:it(?:'s| is) |it was )?(?:very |so |really )?(?:nice|good|great|lovely|pleased|glad|happy|a pleasure|pleasure) (?:to (?:meet|see|e-?meet|talk to|speak (?:to|with)) you|meeting you)(?: too| as well| again| all)?",
+  '(?:how are you|how do you do|how are things|how is it going|how\'s it going|how have you been)(?: doing)?(?: today)?', '(?:and|how about|what about) you(?:rself)?',
+  "(?:i(?:'m| am)|we(?:'re| are)|doing|all|very|pretty|quite|really)? ?(?:good|fine|great|well|okay|ok|not bad|doing well|doing good|doing great)(?: too| as well)?",
+  'thank(?:s| you)(?: so much| very much| a lot)?(?: for (?:having me|your time|the time|the opportunity|taking the time|joining|inviting me|the invitation|the introduction|asking|that))?(?: today)?',
+  "(?:can|could) you (?:hear|see) (?:me|my screen)(?: okay| ok| clearly| well| now| all right| alright)?", "(?:yes,? ?|yeah,? ?)?i can (?:hear|see) (?:you|your screen|it|that)(?: okay| ok| clearly| well| fine| now| too| loud and clear)?",
+  'you too', 'same here', 'likewise', 'of course', 'no problem', 'sounds good', 'sorry(?: about that)?', 'excuse me', 'pardon(?: me)?',
+  '(?:just |give me )?(?:a|one) (?:moment|second|sec|minute)(?: please)?', 'let me (?:think|see)(?: about (?:that|it))?', "that(?:'s| is) a (?:good|great|interesting) question",
+  'bye(?: bye)?', 'goodbye', 'see you(?: soon| later| then)?', 'take care', 'have a (?:nice|good|great|lovely) (?:day|one|weekend|evening|week|rest of (?:the|your) (?:day|week))',
+  'ok(?:ay)?', 'right', 'yeah', 'yes', 'yep', 'sure', 'so', 'well', 'alright', 'all right', 'cool', 'perfect', 'please', 'mm+-?hm+', 'uh-?huh', 'hm+', 'um+', 'uh+',
+].join('|') + ')\\b|大家好|你好|您好|早上好|上午好|下午好|晚上好|很?(?:高兴|开心|荣幸)(?:认识|见到)(?:你|您|大家)|幸会|(?:非常|很)?(?:谢谢|感谢)(?:你|您|大家)?(?:的时间|的邀请|给我这个机会)?|(?:你|您)?(?:能|可以)?听(?:得)?(?:到|见)(?:我)?(?:吗|了)?|(?:我)?(?:能|可以)听(?:得)?(?:到|见)|不好意思|对不起|没问题|没关系|好的?|嗯+|对|是的|可以|行|再见|拜拜)', 'gi');
 // Words a finished sentence does not end on.
 const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|that|which|is|are|was|were|if|as|so|because|when|where|how|what|your|you|would|could|should)$/i;
+
+const unit = (v) => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; return Array.from(v, x => x / n); };
 
 // Holds the meeting state (transcript, shared-screen text) and produces
 // answer suggestions. No Electron dependencies, so it can be tested in Node.
@@ -141,10 +158,13 @@ class Copilot extends EventEmitter {
   setScreenText(text) { this.screenText = String(text || '').trim(); }
 
   // Whether something the microphone picked up is the user taking their turn: a real
-  // reply, not a "yeah" or "mm-hm", and not said over the other side (their voice from the
-  // speakers, or a word of agreement while they talk).
+  // reply, not a "yeah" or "mm-hm", not a greeting ("Hello, nice to meet you."), and not said
+  // over the other side (their voice from the speakers, or a word of agreement while they talk).
   _isOwnTurn(you) {
-    if (tokenize(you.text).length < 4) return false;
+    // Four words of substance once greetings and the like are set aside (Chinese: eight characters).
+    const said = you.text.replace(SMALL_TALK, ' ');
+    const cjk = (said.match(/[\u4e00-\u9fff]/g) || []).length;
+    if (tokenize(said.replace(/[\u4e00-\u9fff]/g, ' ')).length + Math.floor(cjk / 2) < 4) return false;
     const start = you.t, end = you.t + (you.dur || 0);
     if (end <= start) return true;
     let over = 0;
@@ -178,6 +198,36 @@ class Copilot extends EventEmitter {
     return { run, fresh, answeredEnd: lastAnswered ? lastAnswered.t + (lastAnswered.dur || 0) : 0 };
   }
 
+  // What to search the user's material with for something they said.
+  //   query: the words to look up. A long turn is searched by its end, where the question
+  //   is; the set-up before it would pull in passages about everything mentioned on the way.
+  //   A question too thin to search on gets a little of what came before it.
+  //   whole: for search by meaning, the turn from its start as well (when it is longer than
+  //   the query), so the set-up counts there too.
+  _searchTexts(asked) {
+    if (tokenize(asked).length < 4) {
+      const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).filter(e => !asked.includes(e.text)).map(e => e.text).join(' ');
+      return { query: prev ? `${asked} ${prev}` : asked, whole: '' };
+    }
+    if (asked.length <= 700) return { query: asked, whole: '' };
+    return { query: asked.slice(-700).replace(/^\S*\s/, ''), whole: asked.slice(-4000) };
+  }
+
+  // The meaning of some texts as vectors, or null when search by meaning is off or the
+  // lookup fails. The last lookup is kept: it is started as soon as a question is heard,
+  // while the app still waits to see whether they carry on, and the answer picks it up.
+  _embed(texts) {
+    if (!this.llm.embedConfigured() || !this.kb.stats().embedded) return Promise.resolve(null);
+    const key = texts.join('\n\u0000\n');
+    if (this._vecs && this._vecs.key === key) return this._vecs.promise;
+    const promise = this.llm.embed(texts, { signal: AbortSignal.timeout(3000) }).catch(() => {
+      if (this._vecs && this._vecs.promise === promise) this._vecs = null; // a failure is not remembered
+      return null;
+    });
+    this._vecs = { key, promise };
+    return promise;
+  }
+
   _maybeAutoAnswer() {
     if (this.getConfig().autoAnswer !== 'questions' || this.pendingThem > 0 || this.speakingThem) return;
     const { run, fresh, answeredEnd } = this._theirTurn();
@@ -196,6 +246,9 @@ class Copilot extends EventEmitter {
       return;
     }
     clearTimeout(this.timer);
+    // The lookup of what they mean starts now and runs during the wait below.
+    const texts = this._searchTexts(run.map(e => e.text).join(' '));
+    this._embed(texts.whole ? [texts.query, texts.whole] : [texts.query]).catch(() => {});
     // A sentence that trails off ("How would you handle a pipeline that ...") is probably
     // not finished: wait longer before answering, so the answer is not started twice.
     // (Chinese is often written down without a closing mark, so there only an explicit
@@ -256,24 +309,19 @@ class Copilot extends EventEmitter {
     this.emit('answer', { type: 'start', id, question: mode === 'screen' ? question.trim() : asked, mode });
 
     try {
-      // Retrieval: the question, plus a little context when the question alone is too thin to search on.
-      // A long turn is searched by its end, where the question is; the set-up before it
-      // would pull in passages about everything they mentioned on the way.
-      let query = asked.length > 700 ? asked.slice(-700).replace(/^\S*\s/, '') : asked;
-      if (mode === 'screen') query = `${question} ${this.screenText.slice(0, 500)}`;
+      // Retrieval: see _searchTexts.
+      let { query, whole } = this._searchTexts(asked);
+      if (mode === 'screen') { query = `${question} ${this.screenText.slice(0, 500)}`; whole = ''; }
       else if (mode === 'typed' && tokenize(asked).length < 5 && this.history.length) {
-        query = `${asked} ${this.history[this.history.length - 1].question}`;
-      } else if (tokenize(asked).length < 4) {
-        const prev = this.entries.filter(e => !e.pending && e.who === 'them').slice(-3).map(e => e.text).join(' ');
-        query = `${asked} ${prev}`;
+        query = `${asked} ${this.history[this.history.length - 1].question}`; whole = '';
       }
-      const [{ hits: local, vec }, live] = await Promise.all([this._searchKb(query, ctl.signal), this._searchLive(asked, cfg)]);
+      const [{ hits: local, vecs }, live] = await Promise.all([this._searchKb(query, whole), this._searchLive(asked, cfg)]);
       if (ctl.signal.aborted) return '';
       // Answers prepared in advance go to the model in their own block, closest first: those
       // the search found for this question, then by how alike the questions are (in meaning
       // when search by meaning is on, in wording otherwise).
       const found = new Set(local.filter(r => r.qa).map(r => r.qa.q));
-      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query, vec)
+      const prepared = rankPrepared(this.kb.prepared ? this.kb.prepared() : [], query, vecs)
         .map(p => ({ ...p, found: found.has(p.q) }))
         .sort((a, b) => ((b.match ? 2 : 0) + (b.found ? 1 : 0)) - ((a.match ? 2 : 0) + (a.found ? 1 : 0)));
       const refs = [...live, ...local.filter(r => !r.qa)].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
@@ -322,15 +370,20 @@ class Copilot extends EventEmitter {
     }
   }
 
-  async _searchKb(query, signal) {
+  // -> { hits, vecs }: vecs are the meaning of the query and, for a long turn, of the whole
+  // turn (null without search by meaning). Passages are found by the two together, the end
+  // of the turn counting twice because it is in both.
+  async _searchKb(query, whole = '') {
+    let timer;
+    // A slow lookup is not worth holding the answer for: keywords still search.
+    const vecs = await Promise.race([this._embed(whole ? [query, whole] : [query]), new Promise(resolve => { timer = setTimeout(resolve, 700, null); })]);
+    clearTimeout(timer);
     let vec = null;
-    if (this.llm.embedConfigured() && this.kb.stats().embedded) {
-      try {
-        const t = AbortSignal.timeout(700); // a slow lookup is not worth holding the answer for: keywords still search
-        vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
-      } catch { /* fall back to keyword search */ }
+    if (vecs && vecs.length) {
+      const units = vecs.map(unit);
+      vec = units[0].map((x, i) => units.reduce((sum, u) => sum + (u[i] || 0), 0));
     }
-    return { hits: this.kb.search(query, 8, vec), vec };
+    return { hits: this.kb.search(query, 8, vec), vecs: vecs && vecs.length ? vecs : null };
   }
 
   async _searchLive(query, cfg) {

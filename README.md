@@ -208,7 +208,10 @@ out jumbled, and scanned PDFs have no text to read.
 Search is by keywords and, with OpenAI, also by meaning: passages and prepared
 answers are embedded once with `text-embedding-3-small` (same key, a few
 cents for thousands of passages) and each question is embedded when asked, so
-a question worded differently still finds its passage or prepared answer.
+a question worded differently still finds its passage or prepared answer. A
+long question is embedded whole, from the start of their turn, alongside its
+end. The lookup starts the moment the question is heard, during the short wait
+to see whether they carry on, so it adds little or nothing to the answer.
 Other services keep to keywords unless an embedding model is named under
 Settings > More; type `off` there to use keywords only.
 
