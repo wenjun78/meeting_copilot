@@ -33,6 +33,7 @@ const unit = (v) => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n)
 // Events:
 //   'transcript' {type:'add'|'update'|'remove', entry:{id,who,text,t,pending}}
 //   'answer'     {type:'start'|'sources'|'delta'|'done'|'error', id, ...}
+//   'summary'    {type:'start'|'delta'|'done'|'error', ...} the write-up of the call, made when it ends
 //   'notice'     {level:'error'|'info', message}
 class Copilot extends EventEmitter {
   // debounceMs: how long after a finished question the answer starts. By then the pause has
@@ -56,13 +57,16 @@ class Copilot extends EventEmitter {
     this.speakingThem = false;
     this.generation = 0;
     this.sttTimeoutMs = 25000;
+    this.summary = null;      // { t, text }: the write-up of this call, once made
+    this.summaryAbort = null;
   }
 
   // Clears the conversation. Screen text is kept: the slide on screen has not changed.
   reset() {
     clearTimeout(this.timer);
     if (this.abort) this.abort.abort();
-    this.entries = []; this.lastAnsweredId = 0; this.history = [];
+    if (this.summaryAbort) this.summaryAbort.abort();
+    this.entries = []; this.lastAnsweredId = 0; this.history = []; this.summary = null;
     this.pendingThem = 0; this.speakingThem = false;
     this.generation = (this.generation || 0) + 1; // segments still being transcribed belong to the old meeting
   }
@@ -357,7 +361,7 @@ class Copilot extends EventEmitter {
       // there to starting (waiting to see whether they carry on), and from there to the first
       // words (search and the model).
       const timing = spoken && firstWords ? { heard: spoken.heard - spoken.end, wait: begun - spoken.heard, first: firstWords - begun } : null;
-      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim(), ...(timing ? { timing } : {}) });
+      this.history.push({ t: Date.now(), begun, mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim(), ...(timing ? { timing } : {}) });
       if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
@@ -476,6 +480,108 @@ class Copilot extends EventEmitter {
       : mode === 'typed' ? `My question: ${asked}`
         : asked.length > 400 ? `Everything they have said since I last spoke (the question is usually at the end; what comes before sets it up, and every part of it counts):\n"${asked}"\nWrite what I should say.`
           : `They just said: "${asked}"\nWrite what I should say.`);
+    return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
+  }
+
+  // ---- the write-up of the call ------------------------------------------------------
+  // Whether enough was said for a summary to be worth writing: a real exchange, not a sound check.
+  worthSummarising() {
+    const said = this.entries.filter(e => !e.pending);
+    return said.length >= 4 && said.reduce((n, e) => n + e.text.length, 0) >= 300;
+  }
+
+  // Writes a detailed account of the whole call from its transcript: what was covered, what
+  // they said, how the user did, what to follow up. Made when listening stops, or on request.
+  // auto: started by the app, so a call too short to summarise is passed over without a word.
+  async summarize({ auto = false } = {}) {
+    if (this.summaryAbort) this.summaryAbort.abort();
+    const ctl = new AbortController();
+    this.summaryAbort = ctl;
+    const generation = this.generation || 0;
+    try {
+      // The last words are often still being transcribed when listening stops.
+      for (let i = 0; i < 80 && this.entries.some(e => e.pending) && !ctl.signal.aborted; i++) await new Promise(r => setTimeout(r, 100));
+      if (ctl.signal.aborted || generation !== (this.generation || 0)) return '';
+      if (!this.worthSummarising()) {
+        if (!auto) this.emit('summary', { type: 'error', message: 'There is not enough conversation to summarise yet.' });
+        return '';
+      }
+      this.emit('summary', { type: 'start' });
+      const cfg = this.getConfig();
+      const send = (lean) => this.llm.chatStream(this._summaryMessages({ lean }), {
+        signal: ctl.signal, maxTokens: 4000, // room for a long call and for reasoning models
+        onDelta: (piece) => this.emit('summary', { type: 'delta', text: piece }),
+      });
+      let text;
+      try { text = await send(cfg.answerContext === 'lean'); } catch (e) {
+        // More than the service takes in one request: the end of the call, without the notes.
+        if (cfg.answerContext === 'lean' || ctl.signal.aborted || !/too large|tokens per minute|\bTPM\b|context length|maximum context|request_too_large/i.test(e.message)) throw e;
+        this.emit('summary', { type: 'start', trimmed: true });
+        text = await send(true);
+      }
+      if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
+      this.summary = { t: Date.now(), text: text.trim() };
+      this.emit('summary', { type: 'done', text: this.summary.text, t: this.summary.t });
+      return this.summary.text;
+    } catch (e) {
+      if (!ctl.signal.aborted) this.emit('summary', { type: 'error', message: e.message });
+      return '';
+    } finally {
+      if (this.summaryAbort === ctl) this.summaryAbort = null;
+    }
+  }
+
+  // lean: for services that take little at once: the last part of the call, without the notes.
+  _summaryMessages({ lean = false } = {}) {
+    const system = [
+      'You write the user\'s own record of a call that has just ended, from its transcript. "Me" is the user; "Them" is the other side (one person or several: the transcript does not tell them apart, so name a speaker only when the words make it clear). The user reads this afterwards to remember what happened, to judge how it went and to prepare for what comes next. Be complete, specific and honest.',
+      'Write these sections in this order, each under a "## " heading with exactly this name. Leave a section out when the call has nothing for it.',
+      '## Overview',
+      'Three to five sentences: what kind of call it was, who it was with (names and roles only if they were said), what it was for, how long it ran, and how it ended, including any outcome or next step that was stated.',
+      '## What was covered',
+      'In the order of the call, one bullet for every question or topic the other side raised, none left out: the question or topic in a few words in bold, then what I answered (the substance and the specifics I gave: examples, numbers, tools), then how they reacted if they did.',
+      '## What they told me',
+      'Every fact the other side gave that I may need later, one bullet each: the role and its duties, the team and who is on it, the company, tools, expectations, the process and its stages, dates, pay or terms, anything they said about what they are looking for.',
+      '## Questions I asked',
+      'Each question I put to them and what they answered.',
+      '## How I did',
+      'Only when I was being assessed or was presenting (an interview, a pitch, a review, a demo). First "Went well:", then the strongest moments, each with what I said that made it work. Then "Weak:", then each answer that was thin, vague, rambling, off the question, contradicted something else I said, or missed what they were plainly looking for: name the question, quote a few of my words, and say in one sentence what was wrong. After each weak point add a line starting "Better:" giving what to say next time in one or two sentences, built on my notes when they cover it. Be direct. Do not flatter, do not soften a weak answer, and do not invent a weakness to fill the section. If the transcript holds little of what I said, state that my side was not captured and cannot be judged, and judge nothing.',
+      '## Follow-ups',
+      'What I said I would do or send, what they said they would do, and dates or deadlines, one bullet each, marked "Me:" or "Them:".',
+      '## Worth preparing',
+      'Questions from this call that I answered thinly or that are likely to be asked again elsewhere, worded as they were asked, one bullet each, so I can add them to my prepared answers.',
+      'Rules:',
+      '- Use only what the transcript supports. Never invent a name, number, date, outcome or reaction. Where the transcript is unclear, say so ("unclear in the transcript") rather than guess.',
+      '- The transcript comes from speech recognition: read through obvious mis-hearings, and do not count a mis-heard word against me.',
+      '- Lines marked "Suggested" are answers this app proposed on screen during the call. I may have said them, said something else, or said nothing. What I said is in the "Me" lines only: describe and judge my answers from those, never from a suggestion.',
+      '- My notes, when given, are background: who I am and what the call was for (a job description describes what the other side wants, not what I have done). Use them to understand the call and for the "Better:" lines, not as things that were said.',
+      '- Plain text: "## " headings as above, "- " bullets, bold (**like this**) only for the few words that open a bullet. No tables, no code blocks, no preamble before the first heading and no closing remarks after the last section.',
+      '- Write in the language most of the call was held in. Length follows the call: every question and fact is kept, in few words each; an hour-long interview usually needs 600 to 1,000 words.',
+    ].join('\n');
+
+    const said = this.entries.filter(e => !e.pending);
+    const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    // A suggestion sits where it was asked for, straight after the words it answers.
+    const items = [
+      ...said.map(e => ({ t: e.t, text: `[${clock(e.t)}] ${e.who === 'them' ? 'Them' : 'Me'}: ${e.text}` })),
+      ...this.history.filter(h => h.mode !== 'typed').map(h => ({ t: h.begun || h.t || 0, text: `[${clock(h.begun || h.t || Date.now())}] Suggested${h.mode === 'screen' ? ' (from the shared screen)' : ''}: ${h.answer.replace(/\s*\n\s*/g, ' ').slice(0, lean ? 200 : 500)}` })),
+    ].sort((a, b) => a.t - b.t).map(x => x.text);
+    // As much of the call as fits, counted from its end; a very long call loses its opening minutes.
+    let room = lean ? 14000 : 150000, from = items.length;
+    while (from > 0 && items[from - 1].length <= room) { room -= items[--from].length; }
+    const cut = from > 0;
+    const span = (ms) => { const m = Math.round(ms / 60000); return m >= 1 ? `${m} min` : `${Math.max(1, Math.round(ms / 1000))} s`; };
+    const talk = (who) => span(said.filter(e => e.who === who).reduce((n, e) => n + (e.dur || 0), 0));
+    const first = said[0], last = said[said.length - 1];
+    const facts = `The call: ${new Date(first.t).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${clock(first.t)} to ${clock(last.t + (last.dur || 0))} (${span(last.t + (last.dur || 0) - first.t)}). Speech captured: them ${talk('them')}, me ${talk('you')}.`;
+    const parts = [facts];
+    if (!lean) {
+      const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], { total: 12000, perNote: 4000 })
+        .filter(n => n.sent > 0).map(n => `### ${n.title}\n${n.text.slice(0, n.sent)}`);
+      if (notes.length) parts.push(`My notes (background, not part of the call):\n${notes.join('\n\n')}`);
+    }
+    parts.push(`Transcript${cut ? ' (the call was longer than fits; its opening is left out, so say in the overview that the summary starts part-way in)' : ''}:\n${items.slice(from).join('\n')}`);
+    parts.push('Write the record of this call.');
     return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
   }
 

@@ -680,8 +680,10 @@ function wireIpc() {
 
   handle('answer:ask', (req) => { copilot.answer(req || {}); return true; });
   handle('meeting:listening', (on) => {
-    const starting = !!on && !meetingOn;
+    const starting = !!on && !meetingOn, stopping = !on && meetingOn;
     meetingOn = !!on;
+    // The call is over: write it up (not awaited; it arrives as 'summary' events).
+    if (stopping && config.get().summaryOnStop !== false) copilot.summarize({ auto: true }).catch(() => {});
     if (starting) autoSync({ force: true }).catch(() => {}); // not awaited: listening starts immediately
     if (!on) downloadUpdate(); // an update found during the meeting is fetched once it ends
     if (!on) liveStop();
@@ -703,6 +705,16 @@ function wireIpc() {
     const mean = (pick) => (timed.reduce((n, t) => n + pick(t), 0) / timed.length / 1000).toFixed(1);
     const speed = answers && timed.length ? `\n(Answers began ${mean(t => t.heard + t.wait + t.first)} s after they stopped speaking, on average over ${timed.length}: ${mean(t => t.heard)} s to notice the pause and transcribe, ${mean(t => t.wait)} s waiting in case they carried on, ${mean(t => t.first)} s for search and the model's first words.)` : '';
     fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)${speed}\n`);
+    return r.filePath;
+  });
+
+  handle('meeting:summary', () => { copilot.summarize().catch(() => {}); return true; }); // arrives as 'summary' events
+  handle('meeting:summarySave', async () => {
+    if (!copilot.summary) throw new Error('There is no summary yet.');
+    const stamp = new Date(copilot.summary.t).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    const r = await dialog.showSaveDialog(win, { defaultPath: `meeting-summary-${stamp}.md`, filters: [{ name: 'Markdown', extensions: ['md'] }, { name: 'Text', extensions: ['txt'] }] });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, `# Meeting summary, ${new Date(copilot.summary.t).toLocaleString([], { dateStyle: 'long', timeStyle: 'short' })}\n\n${copilot.summary.text}\n`);
     return r.filePath;
   });
 
@@ -755,7 +767,7 @@ app.whenReady().then(() => {
   llm = new LLM(() => config.get(), netFetch);
   ocr = new OcrEngine({ dataDir: path.join(dir, 'tessdata'), fetchFn: netFetch });
   copilot = new Copilot({ getConfig: () => config.get(), llm, kb, liveSearch: (t, q, o) => api.liveSearch(t, q, { ...o, fetchFn: netFetch }) });
-  for (const ev of ['transcript', 'answer', 'notice']) copilot.on(ev, (p) => send(ev, p));
+  for (const ev of ['transcript', 'answer', 'summary', 'notice']) copilot.on(ev, (p) => send(ev, p));
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(['media', 'display-capture', 'clipboard-sanitized-write'].includes(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => ['media', 'display-capture', 'clipboard-sanitized-write'].includes(permission));

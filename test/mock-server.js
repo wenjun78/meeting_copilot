@@ -23,7 +23,7 @@ const REPO_FILES = [
 // committed utterance in turn (default: sttLines), { refuse: 'reason' } rejects the session
 // settings, { silent: true } never sends a final text, { closeAfter: n } drops the connection
 // after n utterances.
-function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92', live = {} } = {}) {
+function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92', live = {}, summary = '' } = {}) {
   const log = { chat: [], stt: [], embed: [], search: [], github: [], tarballs: 0, live: { sessions: [], auth: [], appended: [], commits: 0, clears: 0 } };
   const state = { pushedAt };
   let sttIndex = 0;
@@ -59,10 +59,13 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-0
           if ('temperature' in payload) return json(400, { error: { message: "Unsupported value: 'temperature' does not support 0.3 with this model. Only the default (1) value is supported." } });
           if ('verbosity' in payload) return json(400, { error: { message: "Unknown parameter: 'verbosity'." } });
         }
+        const isSummary = /record of a call that has just ended/.test(payload.messages[0].content);
+        if (isSummary && summary === 'too-large' && payload.messages.at(-1).content.length > 16000) return json(413, { error: { message: 'Request too large for this model: tokens per minute (TPM) limit' } });
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         const SQL = 'Here is the query.\n```sql\nSELECT c.id, c.name, COUNT(*) AS orders\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.created_at >= CURRENT_DATE - INTERVAL \'30\' DAY\nGROUP BY c.id, c.name\nHAVING COUNT(*) > 1;\n```\nI join orders to customers, keep the last 30 days, and filter groups with more than one order.\n- Customers with no orders drop out of the inner join';
         const fromScreen = /Base the reply on the shared-screen text/.test(payload.messages.at(-1).content);
-        const words = (fromScreen ? SQL : answer).split(/(?<= )/);
+        const SUMMARY = '## Overview\nA first-round interview for a data engineering role, about ten minutes.\n\n## What was covered\n- **Duplicate customer records:** I described two passes, an exact match on tax ID and a fuzzy match at 0.92.\n- **Nightly loads:** I said Airflow with retries.\n\n## What they told me\n- The team is five people.\n\n## How I did\nWent well:\n- The duplicates answer was specific.\nWeak:\n- **Nightly loads:** "we just run it" gave no detail.\nBetter: Name the schedule, the retries and how a failed load is noticed.\n\n## Follow-ups\n- Me: send the portfolio link.';
+        const words = (isSummary ? SUMMARY : fromScreen ? SQL : answer).split(/(?<= )/);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { role: 'assistant', reasoning: 'thinking...' } }] })}\n\n`);
         let i = 0;
         const tick = () => {

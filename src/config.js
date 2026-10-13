@@ -10,6 +10,7 @@ const DEFAULTS = {
   autoSync: true,                     // re-read sources in the background when they change
   answerLength: 'short',              // 'short' | 'detailed'
   answerContext: 'full',              // 'full' | 'lean' (less sent per answer, for services with tight token limits)
+  summaryOnStop: true,                // write up the call when listening stops
   defaults: 3,                        // which set of defaults these settings were last brought up to
   llm: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-6.1-sol', extra: { reasoning_effort: 'low' } },
   // stt.model: a live model (gpt-live-transcribe) streams the other side's speech as it is spoken;

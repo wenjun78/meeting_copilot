@@ -1597,3 +1597,76 @@ test('search by meaning takes the whole turn from its start, looked up while the
   assert.equal(ranked[0].q, 'Why did people leave?');
   assert.ok(ranked[0].match && ranked[0].byMeaning && !ranked[1].match);
 });
+
+test('when the call ends it is written up: the whole transcript goes to the model, the summary comes back in pieces', async () => {
+  const getConfig = cfgFor({});
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sum-'));
+  fs.mkdirSync(path.join(dir, 'jd'));
+  fs.writeFileSync(path.join(dir, 'jd', '_note.md'), 'Data engineer. Must know Airflow and SQL.');
+  const kb = new KnowledgeBase(null);
+  kb.setSource(await ingestFolder(dir, { sections: true }));
+  const co = new Copilot({ getConfig: () => ({ ...getConfig(), autoAnswer: 'off' }), llm: new LLM(getConfig), kb, debounceMs: 20 });
+  const events = [];
+  co.on('summary', e => events.push(e));
+  const say = (who, text, ms = 5) => co.finishUtterance(co.openUtterance(who, Date.now() - ms), async () => text, ms, 200);
+
+  // A sound check is not a call: asked for by the app nothing happens, asked for by hand it says why.
+  await say('them', 'Can you hear me?');
+  assert.equal(await co.summarize({ auto: true }), '');
+  assert.deepEqual(events, []);
+  await co.summarize();
+  assert.deepEqual(events.map(e => e.type), ['error']);
+  assert.match(events[0].message, /not enough conversation/);
+  events.length = 0;
+
+  await say('you', 'Yes, I can hear you. Thank you for having me.');
+  await say('them', 'This is a first-round interview for the data engineering role, and the team is five people. How do you run your nightly loads?');
+  await say('you', 'We just run it with Airflow every night and it retries.');
+  await new Promise(r => setTimeout(r, 15));
+  await co.answer({ mode: 'manual' }); // a suggestion made during the call
+  await new Promise(r => setTimeout(r, 15));
+  await say('them', 'Please send us your portfolio link after the call.');
+  // The last words are still being transcribed when listening stops: the summary waits for them.
+  let finish;
+  const last = co.finishUtterance(co.openUtterance('you', Date.now()), () => new Promise(r => { finish = r; }), 5, 0);
+  const before = srv.log.chat.length;
+  const writing = co.summarize({ auto: true });
+  await new Promise(r => setTimeout(r, 250));
+  assert.equal(srv.log.chat.length, before, 'not sent while a line is pending');
+  finish('I will send it today.'); await last;
+  const text = await writing;
+
+  assert.match(text, /^## Overview\n/);
+  assert.equal(co.summary.text, text);
+  assert.equal(events[0].type, 'start');
+  assert.equal(events.at(-1).type, 'done');
+  assert.equal(events.filter(e => e.type === 'delta').map(e => e.text).join('').trim(), text, 'it arrives in pieces');
+  const [system, user] = srv.log.chat.at(-1).messages.map(m => m.content);
+  for (const heading of ['## Overview', '## What was covered', '## What they told me', '## Questions I asked', '## How I did', '## Follow-ups', '## Worth preparing']) assert.ok(system.includes(heading), heading);
+  assert.match(system, /Do not flatter/);
+  assert.match(system, /What I said is in the "Me" lines only/);
+  assert.match(user, /^The call: .*Speech captured: them \d+ s, me \d+ s\./);
+  assert.match(user, /My notes \(background, not part of the call\):[\s\S]*Must know Airflow and SQL/);
+  const lines = user.slice(user.indexOf('Transcript:')).split('\n').filter(l => /^\[/.test(l)).map(l => l.replace(/^\[[^\]]*\] /, '').slice(0, 12));
+  assert.deepEqual(lines, ['Them: Can yo', 'Me: Yes, I c', 'Them: This i', 'Me: We just ', 'Suggested: I', 'Them: Please', 'Me: I will s'], 'both sides and the suggestions, in order');
+
+  // A service that takes little at once gets the end of the call without the notes.
+  const small = await mock.start({ summary: 'too-large' });
+  const cfg2 = () => ({ ...getConfig(), autoAnswer: 'off', llm: { ...getConfig().llm, baseUrl: small.base + '/v1' } });
+  const co2 = new Copilot({ getConfig: cfg2, llm: new LLM(cfg2), kb, debounceMs: 20 });
+  const starts = [];
+  co2.on('summary', e => { if (e.type === 'start') starts.push(!!e.trimmed); });
+  for (let i = 0; i < 120; i++) co2.entries.push({ id: ++co2.seq, who: i % 2 ? 'you' : 'them', text: `Line ${i}: ` + 'words about the pipeline and how it is run. '.repeat(6), t: Date.now() - (120 - i) * 20000, dur: 15000, pending: false });
+  const again = await co2.summarize();
+  const sent = small.log.chat.at(-1).messages[1].content;
+  await small.close();
+  assert.match(again, /^## Overview/);
+  assert.deepEqual(starts, [false, true]);
+  assert.ok(sent.length < 16000 && /Line 119:/.test(sent) && !/Line 0:/.test(sent) && /its opening is left out/.test(sent) && !/My notes/.test(sent));
+
+  // Clearing the meeting clears its summary, and stops one being written.
+  const pending = co.summarize();
+  co.reset();
+  assert.equal(await pending, '');
+  assert.equal(co.summary, null);
+});

@@ -190,6 +190,19 @@ input.keys:focus { border-color: var(--them); }
 .line p { margin: 0; }
 .line.pending p { color: var(--muted); }
 
+/* Summary: the call written up, read at leisure after it ends. */
+.summary { user-select: text; font: 13.5px/1.55 var(--ui); color: var(--text); }
+.summary:empty { display: none; }
+.summary h3 { margin: 1.1em 0 0.35em; font: 600 12px/1.3 var(--ui); letter-spacing: 0.04em; text-transform: uppercase; color: var(--them); }
+.summary h3:first-child { margin-top: 0; }
+.summary p { margin: 0 0 0.5em; }
+.summary p.mark { margin: 0.7em 0 0.25em; font-weight: 600; }
+.summary p.better { margin: -0.2em 0 0.6em 1.15em; padding-left: 8px; border-left: 2px solid var(--you); }
+.summary ul { margin: 0 0 0.5em; padding-left: 1.15em; }
+.summary li { margin: 0.28em 0; }
+.summary li::marker { color: var(--muted); }
+.summary strong { font-weight: 600; }
+
 .preview { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--rule); flex: none; }
 .screen-text { margin: 0; white-space: pre-wrap; font: 12px/1.5 var(--ui); color: var(--text); user-select: text; }
 

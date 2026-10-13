@@ -380,10 +380,41 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('recording', { indicator: recShown, files: recFiles, settingShown: await js(`document.getElementById('s-record').checked`) });
     if (!recShown || recFiles.length !== 1 || recFiles[0].bytes < 8000 || !recFiles[0].webm) throw new Error('the meeting was not recorded to a playable file');
 
+    // Stopping after a few words is not a call worth writing up: nothing is written.
+    await new Promise(r => setTimeout(r, 1200));
+    const quiet = { tab: await js(`document.querySelector('.tabs button[aria-selected="true"]').dataset.tab`), written: !!copilot.summary };
+    // After a real exchange, stopping writes the call up in the Summary tab.
+    const told = [['them', 'Thanks for joining. This is a first-round interview for the data engineering role, and the team is five people.'], ['you', 'Thank you for having me. I have five years in data platforms, mostly pipelines for customer records.'],
+      ['them', 'How do you run your nightly loads, and what happens when one fails?'], ['you', 'We just run it with Airflow every night and it retries.'], ['them', 'Good. Please send us your portfolio link after the call.'], ['you', 'I will send it today.']];
+    for (const [who, text] of told) await copilot.finishUtterance(copilot.openUtterance(who, Date.now() - 4000), async () => text, 4000, 300);
+    await js(`document.getElementById('toggle').click()`);
+    await waitFor('picker again', () => js(`!document.getElementById('picker').hidden`));
+    await js(`document.getElementById('pickNone').click()`);
+    await waitFor('listening again', () => js(`document.body.classList.contains('listening')`));
+    await js(`document.getElementById('toggle').click()`);
+    await waitFor('summary written', () => js(`!document.getElementById('summarySave').hidden`), 30000);
+    await new Promise(r => setTimeout(r, 300));
+    await shot('8b-summary');
+    const sum = {
+      quietAfterAShortCall: quiet,
+      tab: await js(`document.querySelector('.tabs button[aria-selected="true"]').dataset.tab`),
+      headings: await js(`[...document.querySelectorAll('#summaryText h3')].map(h => h.textContent)`),
+      bullets: await js(`document.querySelectorAll('#summaryText li').length`),
+      bold: await js(`[...document.querySelectorAll('#summaryText li strong')].map(n => n.textContent)`),
+      buttons: await js(`['summaryMake', 'summaryCopy', 'summarySave'].map(id => document.getElementById(id).hidden ? '' : document.getElementById(id).textContent)`),
+      setting: await js(`document.getElementById('s-summary').checked`),
+      kept: !!copilot.summary && /## How I did/.test(copilot.summary.text),
+      sentTranscript: /Me: We just run it with Airflow/.test(JSON.stringify(copilot._summaryMessages()[1].content)),
+    };
+    step('summary', sum);
+    if (quiet.written || quiet.tab === 'summary' || sum.tab !== 'summary' || sum.headings[0] !== 'Overview' || !sum.headings.includes('How I did') || sum.bullets < 5 || !sum.bold.length || sum.buttons.join('|') !== 'Write it again|Copy|Save summary' || !sum.setting || !sum.kept || !sum.sentTranscript) throw new Error('the call was not written up when listening stopped');
+    await js(`document.querySelector('[data-tab=transcript]').click()`);
+
     // Nothing to answer and Knowledge open: side by side the answer area stays; in the
     // narrow window it steps aside. Clearing the meeting empties the log.
     await js(`document.getElementById('resetBtn').click()`);
     await waitFor('cleared', () => js(`document.getElementById('card').classList.contains('idle') && !document.querySelector('.line')`));
+    if (await js(`document.getElementById('summaryText').childElementCount`) || copilot.summary) throw new Error('clearing the meeting left its summary behind');
     await js(`document.querySelector('[data-tab=knowledge]').click()`);
     await new Promise(r => setTimeout(r, 400));
     const cueOf = () => js(`getComputedStyle(document.querySelector('.cue')).display`);
