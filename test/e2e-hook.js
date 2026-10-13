@@ -264,6 +264,10 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     }
     await waitFor('listening', () => js(`document.body.classList.contains('listening')`));
     step('listening', { toasts: await js(`[...document.querySelectorAll('.toast')].map(t => t.textContent)`) });
+    // Speech is found by the trained model, not by the loudness fallback.
+    const detector = await js(`({ model: !!window.capture.model, ort: !!window.ort })`);
+    step('speech model', detector);
+    if (!detector.model) throw new Error('the speech model did not load: detection fell back to loudness');
 
     await waitFor('transcript line', () => js(`document.querySelectorAll('.line.them:not(.pending)').length > 0`));
     await waitFor('answer', () => js(`document.querySelector('#card:not(.idle):not(.wait):not(.fail) .lead') && !document.getElementById('copy').hidden`));

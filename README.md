@@ -145,6 +145,9 @@ Use headphones. With speakers, your microphone also hears the other side;
 what it picks up while they are talking is left out, but headphones give a
 cleaner transcript and keep your own words when you both speak at once.
 
+Speech is found by a trained model (Silero VAD, run on your computer), not by
+loudness, so a quiet voice is recorded and hiss, fans and typing are not.
+
 A saved transcript ends with how much speech was recorded from each side. If
 that is far less than was said, the audio is not reaching the app: check the
 system volume and the devices under Settings.
@@ -264,7 +267,7 @@ src/ocr.js         Tesseract screen reading
 src/question.js    is this a question?
 src/shortcuts.js   shortcut defaults and the meeting-app conflict table
 src/rag/           chunking, BM25, GitHub / URL / folder ingestion, index
-renderer/          the window: capture.js (audio, screen), app.js (UI)
+renderer/          the window: capture.js (audio, screen), vad.js (finding speech), app.js (UI)
 ```
 
 ## License

@@ -2,7 +2,7 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, session, globalShortcut, screen, dialog, shell, safeStorage, net, systemPreferences, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { fileURLToPath } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const { ConfigStore } = require('./src/config');
 const { LLM } = require('./src/llm');
 const { Copilot } = require('./src/copilot');
@@ -554,6 +554,12 @@ function wireIpc() {
     return r.x + r.w <= 0 || r.y + r.h <= 0 || r.x >= 1 || r.y >= 1 ? null : r;
   });
 
+  // The speech model and its runtime, read here so the window fetches nothing.
+  handle('vad:assets', () => {
+    const dist = path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist');
+    const bytes = (file) => { const b = fs.readFileSync(file); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+    return { model: bytes(path.join(__dirname, 'renderer', 'vad', 'silero_vad_v5.onnx')), wasm: bytes(path.join(dist, 'ort-wasm-simd-threaded.wasm')), runtimeDir: pathToFileURL(dist + path.sep).href };
+  });
   handle('stt:segment', (who, wav, durationMs) => {
     if (who !== 'them' && who !== 'you') return false;
     copilot.onSegment(who, Buffer.from(wav), Number(durationMs) || 0); // result arrives as 'transcript' events
