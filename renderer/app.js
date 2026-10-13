@@ -604,7 +604,7 @@ window.mc.on('kb', (e) => {
 // A row that opens to show the text of one file as the app read it.
 function previewRow(label, meta, sourceId, filePath, cut) {
   const body = el('pre', { class: 'preview-text', text: 'Loading' });
-  const details = el('details', {}, el('summary', {}, el('b', { title: label, text: label }), el('span', { class: cut ? 'cut' : '', text: meta })), body);
+  const details = el('details', { 'data-key': `${sourceId}|${filePath}` }, el('summary', {}, el('b', { title: label, text: label }), el('span', { class: cut ? 'cut' : '', text: meta })), body);
   details.addEventListener('toggle', async () => {
     if (!details.open || details.dataset.loaded) return;
     details.dataset.loaded = '1';
@@ -617,6 +617,9 @@ function previewRow(label, meta, sourceId, filePath, cut) {
 }
 async function renderEquipped() {
   const inv = await call('kb:inventory');
+  // A preview that is open stays open when the lists are drawn again (a source refreshed in
+  // the background while it was being read).
+  const wasOpen = new Set([...$('equippedPanel').querySelectorAll('details[open][data-key]')].map(d => d.dataset.key));
   const sent = inv.always.reduce((n, a) => n + a.sent, 0);
   const files = inv.searched.reduce((n, s) => n + s.files.length, 0);
   $('eqSummary').textContent = `${inv.always.length ? `${inv.always.length} ${inv.always.length === 1 ? 'note is' : 'notes are'} sent with every answer (${num(sent)} characters, about ${num(Math.round(sent / 6))} words).` : 'Nothing is sent with every answer yet.'} ${num(files)} ${files === 1 ? 'file' : 'files'} can be searched (${num(inv.passages)} passages).${inv.lean ? ' Lean mode is on, so less is sent.' : ''}${state.kb.embedded ? ' Search is by meaning as well as keywords.' : ' Search is by keywords.'}`;
@@ -634,6 +637,7 @@ async function renderEquipped() {
     if (filter || shown.length <= 8) d.open = true;
     return d;
   }).filter(Boolean) : [el('p', { class: 'empty', text: 'Nothing to search yet. Add your CV, or a repository under Portfolio.' })]));
+  for (const d of $('equippedPanel').querySelectorAll('details[data-key]')) if (wasOpen.has(d.dataset.key)) d.open = true;
 }
 let eqTimer;
 $('eqFilter').addEventListener('input', () => { clearTimeout(eqTimer); eqTimer = setTimeout(() => renderEquipped().catch(fail), 200); });
