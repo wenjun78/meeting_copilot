@@ -347,8 +347,16 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('conversation log', log);
     if (log.shown !== 'flex' || !log.earlier.length || !/duplicate/i.test(log.earlier[log.earlier.length - 1].asked) || log.earlier.some(x => x.asked === log.onCard) || log.inTranscript.length < 2 || !log.saved.some(l => /^Suggested answer/.test(l))) throw new Error('the conversation log is missing answers');
 
+    const recShown = await js(`!document.getElementById('recState').hidden`);
     await js(`document.getElementById('toggle').click()`);
     await waitFor('stopped', () => js(`!document.body.classList.contains('listening')`));
+    // The meeting was recorded: a WebM file that grew while listening, named when listening stopped.
+    await waitFor('recording saved', () => js(`[...document.querySelectorAll('.toast')].some(t => /^Recording saved: .*\\.webm$/.test(t.textContent))`));
+    const recDir = path.join(app.getPath('userData'), 'recordings');
+    const recFiles = fs.readdirSync(recDir).map(f => ({ name: f, bytes: fs.statSync(path.join(recDir, f)).size, webm: fs.readFileSync(path.join(recDir, f)).subarray(0, 4).toString('hex') === '1a45dfa3' }));
+    if (out && recFiles.length) fs.copyFileSync(path.join(recDir, recFiles[0].name), path.join(out, 'recording.webm')); // kept with the screenshots, to listen to
+    step('recording', { indicator: recShown, files: recFiles, settingShown: await js(`document.getElementById('s-record').checked`) });
+    if (!recShown || recFiles.length !== 1 || recFiles[0].bytes < 20000 || !recFiles[0].webm) throw new Error('the meeting was not recorded to a playable file');
 
     // Nothing to answer and Knowledge open: side by side the answer area stays; in the
     // narrow window it steps aside. Clearing the meeting empties the log.

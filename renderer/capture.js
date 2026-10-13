@@ -47,7 +47,7 @@ class Capture {
     return all.filter(d => d.kind === 'audioinput').map(d => ({ id: d.deviceId, label: d.label || 'Microphone' }));
   }
 
-  // opts: { micDeviceId, themSource ('system' | deviceId), wantScreen, systemAudio, ocrIntervalSec }
+  // opts: { micDeviceId, themSource ('system' | deviceId), wantScreen, systemAudio, ocrIntervalSec, record }
   async start(opts) {
     await this.stop();
     const result = { mic: false, them: false, screen: false, problems: [] };
@@ -55,6 +55,21 @@ class Capture {
     await this.ctx.audioWorklet.addModule('vad-worklet.js');
     this.sink = this.ctx.createGain(); this.sink.gain.value = 0; this.sink.connect(this.ctx.destination);
     this.segmenters = []; this.themSeg = null;
+    // Recording: both sides mixed into one track, encoded as it goes and handed on in pieces
+    // every few seconds, so a crash loses seconds, not the meeting.
+    this.recMix = null; this.recorder = null;
+    if (opts.record) {
+      try {
+        const out = this.ctx.createMediaStreamDestination();
+        this.recMix = this.ctx.createGain(); this.recMix.gain.value = 0.7; // headroom for when both sides speak at once
+        this.recMix.connect(out);
+        this.recorder = new MediaRecorder(out.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 });
+        this.recorder.ondataavailable = async (e) => { if (e.data && e.data.size) this.hooks.onRecording(await e.data.arrayBuffer()); };
+      } catch (e) {
+        this.recMix = null; this.recorder = null;
+        result.problems.push(`The meeting is not being recorded (${e.message || e.name}).`);
+      }
+    }
     this.model = await speechModelOnce();
     if (!this.model) result.problems.push('Speech detection is running in basic mode (the speech model could not be loaded), so quiet speech may be missed. Restart the app; if this stays, reinstall it.');
 
@@ -98,6 +113,7 @@ class Capture {
     }
     this.running = result.mic || result.them || result.screen;
     if (!this.running) await this.stop();
+    if (this.recorder && (result.mic || result.them)) { this.recorder.start(3000); result.recording = true; } else this.recorder = null;
     return result;
   }
 
@@ -120,15 +136,17 @@ class Capture {
     // speakers: what it picks up while they are speaking is their voice, and is not sent on.
     const seg = new Segmenter({
       detect: this.model ? this.model.stream() : loudnessDetector(),
-      onUtterance: (pcm) => this.hooks.onSegment(who, encodeWav(pcm), Math.round(pcm.length / RATE * 1000)),
+      onUtterance: (pcm, quietMs) => this.hooks.onSegment(who, encodeWav(pcm), Math.round(pcm.length / RATE * 1000), Math.round(quietMs)),
       onLevel: (rms) => this.hooks.onLevel(who, rms),
       onSpeaking: (on) => this.hooks.onSpeaking(who, on),
       onProblem: (e) => console.warn('speech model failed, using loudness:', e),
-      ...(who === 'you' ? { start: 0.5, stay: 0.35, masked: () => !!this.themSeg && this.themSeg.audible() } : { start: 0.4, stay: 0.3 }),
+      // Their utterance ends after 0.55 s of quiet, so the answer can start sooner; yours after 0.7 s.
+      ...(who === 'you' ? { start: 0.5, stay: 0.35, pause: 22, masked: () => !!this.themSeg && this.themSeg.audible() } : { start: 0.4, stay: 0.3, pause: 17 }),
     });
     if (who === 'them') this.themSeg = seg;
     tap.port.onmessage = (e) => seg.push(e.data);
     src.connect(tap); tap.connect(this.sink); // the muted sink keeps the graph running
+    if (this.recMix) src.connect(this.recMix); // both sides go into the recording, when one is being made
     this.segmenters.push(seg);
     for (const track of stream.getAudioTracks()) {
       track.addEventListener('ended', () => {
@@ -197,6 +215,10 @@ class Capture {
     this.refreshScreen = async () => false;
     clearInterval(this.screenTimer);
     for (const s of this.segmenters || []) s.flush();
+    if (this.recorder) {
+      const rec = this.recorder; this.recorder = null;
+      await new Promise((done) => { rec.onstop = () => setTimeout(done, 50); try { rec.stop(); } catch { done(); } }); // the last piece is handed on before the audio closes
+    }
     for (const s of this.streams) s.getTracks().forEach(t => t.stop());
     this.streams = []; this.segmenters = [];
     if (this.ctx) { try { await this.ctx.close(); } catch { /* already closed */ } this.ctx = null; }

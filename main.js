@@ -108,6 +108,11 @@ function publicConfig() {
   return { config: c, saved, labels, platform: process.platform, encrypted: safeStorage.isEncryptionAvailable(), version: app.getVersion(), updates: updater.supported };
 }
 
+// ---- recordings ---------------------------------------------------------------
+// Kept where the user will find them: Documents/Meeting Copilot Recordings.
+const recordingsDir = () => (process.env.MC_USER_DATA ? path.join(app.getPath('userData'), 'recordings') : path.join(app.getPath('documents'), 'Meeting Copilot Recordings'));
+let recording = ''; // the file being written, while a meeting is recorded
+
 // ---- knowledge sources ------------------------------------------------------
 
 // Files added through the app are copied here, so they keep working if the originals move.
@@ -505,6 +510,22 @@ function wireIpc() {
     const text = kb.fileText(String(sourceId), String(filePath));
     return { text: text.slice(0, 8000), more: Math.max(0, text.length - 8000) };
   });
+  // Recording: the window hands over encoded audio every few seconds; it is appended to a
+  // file made at the first piece. The file is complete at every moment, so a crash keeps
+  // what was recorded up to then.
+  handle('rec:chunk', (bytes) => {
+    if (!recording) {
+      const dir = recordingsDir();
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
+      recording = path.join(dir, `Meeting ${stamp}.webm`);
+      for (let n = 2; fs.existsSync(recording); n++) recording = path.join(dir, `Meeting ${stamp} (${n}).webm`);
+    }
+    fs.appendFileSync(recording, Buffer.from(bytes));
+    return true;
+  });
+  handle('rec:stop', () => { const file = recording; recording = ''; return file || null; });
+  handle('rec:openFolder', () => { const dir = recordingsDir(); fs.mkdirSync(dir, { recursive: true }); shell.openPath(dir); return dir; });
   handle('kb:openFolder', (id) => {
     const src = kb.sources[id];
     if (src && src.origin && src.origin.kind === 'folder') shell.openPath(src.origin.spec);
@@ -560,9 +581,9 @@ function wireIpc() {
     const bytes = (file) => { const b = fs.readFileSync(file); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
     return { model: bytes(path.join(__dirname, 'renderer', 'vad', 'silero_vad_v5.onnx')), wasm: bytes(path.join(dist, 'ort-wasm-simd-threaded.wasm')), runtimeDir: pathToFileURL(dist + path.sep).href };
   });
-  handle('stt:segment', (who, wav, durationMs) => {
+  handle('stt:segment', (who, wav, durationMs, quietMs) => {
     if (who !== 'them' && who !== 'you') return false;
-    copilot.onSegment(who, Buffer.from(wav), Number(durationMs) || 0); // result arrives as 'transcript' events
+    copilot.onSegment(who, Buffer.from(wav), Number(durationMs) || 0, Number(quietMs) || 0); // result arrives as 'transcript' events
     return true;
   });
   handle('stt:speaking', (who, on) => { copilot.setSpeaking(who, !!on); return true; });
@@ -592,7 +613,11 @@ function wireIpc() {
     // audio is not reaching the app (volume, device), whatever the words above look like.
     const span = (ms) => { const s = Math.round(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`; };
     const side = (who) => { const list = copilot.entries.filter(e => e.who === who && !e.pending); return `${span(list.reduce((n, e) => n + (e.dur || 0), 0))} in ${list.length} ${list.length === 1 ? 'piece' : 'pieces'}`; };
-    fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)\n`);
+    // And, with the answers, how long they took to appear and where that time went.
+    const timed = copilot.history.map(h => h.timing).filter(Boolean);
+    const mean = (pick) => (timed.reduce((n, t) => n + pick(t), 0) / timed.length / 1000).toFixed(1);
+    const speed = answers && timed.length ? `\n(Answers began ${mean(t => t.heard + t.wait + t.first)} s after they stopped speaking, on average over ${timed.length}: ${mean(t => t.heard)} s to notice the pause and transcribe, ${mean(t => t.wait)} s waiting in case they carried on, ${mean(t => t.first)} s for search and the model's first words.)` : '';
+    fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)${speed}\n`);
     return r.filePath;
   });
 

@@ -74,6 +74,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .meter.them b { background: var(--them); }
 .meter.you b { background: var(--you); }
 .meter.off { opacity: 0.45; text-decoration: line-through; }
+.rec-state { color: var(--alert); font-weight: 600; white-space: nowrap; }
+.rec-state::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--alert); margin-right: 5px; }
 .screen-state { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 main { flex: 1; min-height: 0; display: flex; flex-direction: column; }

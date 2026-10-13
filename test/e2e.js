@@ -32,6 +32,7 @@ function fakeSpeechWav(file) {
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     llm: { baseUrl: srv.base + '/v1', apiKey: 'test-key', model: 'mock-chat', extra: {} },
     github: { apiBase: srv.base + '/gh' },
+    capture: { record: true },
   }));
   const wav = path.join(tmp, 'speech.wav'); fakeSpeechWav(wav);
   // MC_E2E_BIN runs the test against a packaged build instead of the source tree.

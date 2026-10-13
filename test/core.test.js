@@ -267,7 +267,7 @@ test('copilot: their question is transcribed, grounded in the repo and answered 
   assert.match(co.transcriptText(), /Them: How do you handle/);
   // The saved log has what was said and each answer suggested, in the order they happened.
   const saved = co.transcriptText();
-  assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer:\n {4}\S/);
+  assert.match(saved, /\] Them: How do you handle[^\n]*\n\[[^\]]*\] Suggested answer \(first words \d+\.\d s after they stopped\):\n {4}\S/);
   assert.match(saved, /Suggested answer \(you asked: What threshold do we use\?\):\n {4}[\s\S]*?0\.92/);
   assert.match(saved, /Suggested answer \(from the screen\):/);
   // Without the answers it is the transcript alone.
@@ -1054,7 +1054,8 @@ test('Questions to ask: sent with every answer, with the rule for when they are 
   const co = new Copilot({ getConfig, llm: new LLM(getConfig), kb, debounceMs: 20 });
   const [system, user] = co._buildMessages({ asked: 'Do you have any questions for us?', mode: 'auto', refs: [], cfg: getConfig() });
   assert.match(user.content, /### Instructions for this meeting\nKeep it short\.\n\n### Questions I want to ask the other side\nWhat does success look like/);
-  assert.match(system.content, /When the other side invites questions[^\n]*two or three of those questions as bullets[^\n]*leave out any the conversation has already answered[^\n]*Never answer these questions yourself/);
+  // The whole list is offered, less what the conversation already answered, plus follow-ups from what was said.
+  assert.match(system.content, /When the other side invites questions[^\n]*every one of those questions that the conversation has not already answered[^\n]*limits on bullets and words do not apply[^\n]*"Skipped:"[^\n]*"Also worth asking:"[^\n]*Never answer these questions yourself/);
   const { detectQuestion } = require('../src/question');
   assert.ok(detectQuestion('Okay, that is all from my side. Do you have any questions for us?').ask);
 });
@@ -1122,7 +1123,7 @@ const speechModel = () => (modelOnce = modelOnce || (async () => {
   ort.env.wasm.numThreads = 1;
   return VAD.loadSpeechModel(ort, fs.readFileSync(path.join(__dirname, '..', 'renderer', 'vad', 'silero_vad_v5.onnx')));
 })());
-const THEM = { start: 0.4, stay: 0.3 }, YOU = { start: 0.5, stay: 0.35 };
+const THEM = { start: 0.4, stay: 0.3, pause: 17 }, YOU = { start: 0.5, stay: 0.35, pause: 22 }; // as set in capture.js
 const phrase = (name) => { // 16 kHz mu-law -> samples in -1..1
   const b = fs.readFileSync(path.join(__dirname, 'fixtures', `phrase-${name}.ulaw`)), out = new Float32Array(b.length);
   for (let i = 0; i < b.length; i++) { const u = ~b[i] & 0xff, t = (((u & 0x0f) << 3) + 0x84) << ((u & 0x70) >> 4); out[i] = ((u & 0x80) ? (0x84 - t) : (t - 0x84)) / 32768; }
@@ -1275,4 +1276,39 @@ test('a long question in many pieces is put together; accented short lines are h
   assert.equal(languageToForce('Definições.', ''), 'en');
   assert.equal(languageToForce('I samma rå internen.', ''), 'en');
   assert.equal(languageToForce('Career opportunities', ''), '');
+});
+
+test('answers start promptly after a finished question, and the saved log says where the time went', async () => {
+  const waiting = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (_m, { onDelta }) => { await new Promise(r => setTimeout(r, 30)); onDelta('I use two passes.'); return 'I use two passes.'; },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  // Defaults: a quarter of a second after the transcript of a finished question, longer when it trails off.
+  const real = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null) });
+  assert.equal(real.debounceMs, 250);
+  assert.equal(real.trailMs, 900);
+
+  const co = new Copilot({ getConfig: () => cfg, llm, kb: new KnowledgeBase(null), debounceMs: 20 });
+  const done = new Promise(r => co.on('answer', e => e.type === 'done' && r()));
+  const p = co.onSegment('them', Buffer.from('x'), 4000, 550); // cut after 0.55 s of silence
+  await new Promise(r => setTimeout(r, 40)); // transcription takes a moment
+  waiting.shift()('How do you handle duplicate customer records?');
+  await p; await done;
+  const { timing } = co.history[0];
+  assert.ok(timing.heard >= 585 && timing.heard < 950, `silence and transcription: ${timing.heard} ms`);
+  assert.ok(timing.wait >= 15 && timing.wait < 200, `waiting: ${timing.wait} ms`);
+  assert.ok(timing.first >= 25 && timing.first < 300, `to the first words: ${timing.first} ms`);
+  assert.match(co.transcriptText(), /Suggested answer \(first words 0\.[6-9] s after they stopped\):/);
+  // A typed question has no "they stopped" to measure from.
+  await co.answer({ mode: 'typed', question: 'And the threshold?' });
+  assert.ok(!co.history[1].timing);
+
+  // Prepared answers ranked by meaning: fewer are sent, so the request is shorter.
+  const many = Array.from({ length: 40 }, (_, i) => ({ q: `Question number ${i} about topic ${i}?`, a: 'x'.repeat(600), score: 1 - i / 40, match: i === 0 }));
+  const count = (list) => (co._buildMessages({ asked: 'q', mode: 'typed', refs: [], prepared: list, cfg })[1].content.match(/^Q: /gm) || []).length;
+  const byWording = count(many), byMeaning = count(many.map(x => ({ ...x, byMeaning: true })));
+  assert.ok(byWording >= 24 && byMeaning >= 12 && byMeaning < byWording * 0.65, `${byWording} by wording, ${byMeaning} by meaning`);
 });

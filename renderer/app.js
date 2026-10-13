@@ -230,7 +230,8 @@ $('exportAllBtn').addEventListener('click', async () => {
 // ---- listening --------------------------------------------------------------
 const levels = { them: 0, you: 0 };
 const capture = window.capture = new Capture({
-  onSegment: (who, wav, ms) => { window.mc.call('stt:segment', who, wav, ms); },
+  onSegment: (who, wav, ms, quietMs) => { window.mc.call('stt:segment', who, wav, ms, quietMs); },
+  onRecording: (bytes) => { window.mc.call('rec:chunk', bytes); },
   onLevel: (who, rms) => { levels[who] = Math.max(rms, levels[who] * 0.8); },
   onSpeaking: (who, on) => { window.mc.call('stt:speaking', who, on); },
   onScreenText: (text) => {
@@ -267,13 +268,21 @@ function setListening(on) {
   updateSetupMode();
 }
 
+// Stops listening; a recording in progress is closed and its place shown.
+async function stopListening() {
+  await capture.stop();
+  setListening(false);
+  $('recState').hidden = true;
+  try { const file = await call('rec:stop'); if (file) toast(`Recording saved: ${file}`); } catch (e) { fail(e); }
+}
 async function begin(sourceId) {
   $('picker').hidden = true;
   $('toggle').disabled = true;
   try {
     const { systemAudio } = await call('capture:select', sourceId);
     const c = state.cfg.capture;
-    const res = await capture.start({ micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec });
+    const res = await capture.start({ micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec, record: !!c.record });
+    $('recState').hidden = !res.recording;
     for (const p of res.problems) toast(p, 'error');
     document.querySelector('.meter.them').classList.toggle('off', !res.them);
     document.querySelector('.meter.you').classList.toggle('off', !res.mic);
@@ -299,7 +308,7 @@ async function openPicker() {
   first.focus();
 }
 $('toggle').addEventListener('click', async () => {
-  if (state.listening) { await capture.stop(); setListening(false); } else openPicker();
+  if (state.listening) { await stopListening(); } else openPicker();
 });
 $('pickNone').addEventListener('click', () => begin(null));
 $('pickCancel').addEventListener('click', () => { $('picker').hidden = true; });
@@ -351,7 +360,7 @@ const SECTION_TEXT = {
   about: { what: 'Who you are: your role, strengths, goals and how you like to sound. Sent with every answer.', hint: 'I am a ... with ... years in ... I want my answers to sound ...' },
   cv: { what: 'Your CV. Paste it here or add the file. Sent with every answer.', hint: 'Paste your CV, or drop the PDF or Word file below.' },
   jd: { what: 'The job description, agenda or brief for this meeting. Sent with every answer; replace it before a different meeting.', hint: 'Paste the job description, or drop the file below.' },
-  ask: { what: 'Questions you want to ask them. When they invite your questions, two or three that fit the conversation are suggested, leaving out any it has already answered. Sent with every answer.', hint: 'One question per line, the most important first.\nWhat does success look like in the first six months?\nHow is the team split between building and support?' },
+  ask: { what: 'Questions you want to ask them. When they invite your questions, the whole list is shown, less any the conversation has already answered, with one or two more that follow from what they said. Sent with every answer.', hint: 'One question per line, the most important first.\nWhat does success look like in the first six months?\nHow is the team split between building and support?' },
   publications: { what: 'Your papers. Add each PDF or Word file: it is searched section by section (methods, results, limitations), and its title and abstract go with every answer. Text typed here goes with every answer too.', hint: 'How you would sum up each paper in 30 seconds, your part in it, and what you would do differently.' },
   instructions: { what: 'How the answers should behave: tone, length, what to stress, what to avoid. Sent with every answer.', hint: 'Keep answers under 30 seconds. Lead with ...' },
 };
@@ -682,6 +691,7 @@ function fillSettings() {
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = ['en', 'zh'].includes(c.stt.language) ? c.stt.language : 'en+zh'; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
   $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
+  $('s-record').checked = !!c.capture.record;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;
   $('s-gh-token').placeholder = keyHint(s.githubToken); $('s-gh-api').value = c.github.apiBase;
   $('s-api-url').value = c.api.searchUrl; $('s-api-hname').value = c.api.headerName; $('s-api-hvalue').placeholder = keyHint(s.apiHeader);
@@ -787,7 +797,7 @@ $('settings').addEventListener('submit', async (e) => {
     embed: { baseUrl: v('s-embed-base'), model: v('s-embed-model') },
     github: { apiBase: v('s-gh-api') || 'https://api.github.com' },
     api: { searchUrl: v('s-api-url'), headerName: v('s-api-hname') },
-    capture: { micDeviceId: $('s-mic').value, themSource: $('s-them').value, ocrIntervalSec: Number($('s-ocr-int').value), ocrLangs: v('s-ocr-langs') || 'eng' },
+    capture: { micDeviceId: $('s-mic').value, themSource: $('s-them').value, ocrIntervalSec: Number($('s-ocr-int').value), ocrLangs: v('s-ocr-langs') || 'eng', record: $('s-record').checked },
     shortcuts: Object.fromEntries(SHORTCUT_FIELDS.map(([action, id]) => [action, $(id).dataset.accel || ''])),
   };
   const used = Object.values(patch.shortcuts).filter(Boolean);
@@ -806,6 +816,7 @@ $('settings').addEventListener('submit', async (e) => {
     if (state.answer.status === 'idle') renderIdle();
   } catch (err) { fail(err); }
 });
+$('recFolder').addEventListener('click', () => call('rec:openFolder').catch(fail));
 // Window opacity, in the title bar: applied as the slider moves.
 $('opacity').addEventListener('input', () => call('config:set', { ui: { opacity: Number($('opacity').value) } }).catch(() => {}));
 

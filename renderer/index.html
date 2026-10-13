@@ -31,6 +31,7 @@
 <div class="meters" id="meters" hidden>
   <div class="meter them"><span>Them</span><i><b id="lvThem"></b></i></div>
   <div class="meter you"><span>You</span><i><b id="lvYou"></b></i></div>
+  <span class="rec-state" id="recState" hidden>Recording</span>
   <span class="screen-state" id="screenState"></span>
 </div>
 
@@ -192,6 +193,8 @@
           <label>Your microphone <select id="s-mic"></select></label>
           <label>Their audio <select id="s-them"></select></label>
           <p class="hint" id="themHint"></p>
+          <label class="check"><input id="s-record" type="checkbox"> Record the meeting's audio, both sides, to a file</label>
+          <p class="hint">Saved in Documents, in "Meeting Copilot Recordings", as a .webm file that plays in a browser, VLC or the Windows media player. Tell the other side you are recording where the law or the meeting's rules require it. <button id="recFolder" class="btn quiet" type="button">Open the folder</button></p>
           <label>Read the screen every <select id="s-ocr-int"><option value="2">2 seconds</option><option value="4">4 seconds</option><option value="8">8 seconds</option><option value="15">15 seconds</option></select></label>
           <label>Screen text languages <input id="s-ocr-langs" type="text" placeholder="eng (add more with +, e.g. eng+chi_sim)"></label>
         </fieldset>

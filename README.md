@@ -55,6 +55,7 @@ npm start
 |---|---|
 | Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
 | Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
+| Recording | Optional (Settings > Audio and screen): the meeting's audio, both sides, kept as a .webm file in Documents/Meeting Copilot Recordings. Tell the other side where the law or the meeting's rules require it |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
 | Answers | Written automatically when they ask a question; one or two sentences to say, then supporting points, with numbered sources you can click |
 | Ask | Type your own question, or "Answer from the screen" for what is being shown, including SQL and code tasks |
@@ -163,7 +164,7 @@ Everything lives in the **Knowledge** tab, organised by what it is:
 | JD | The job description, agenda or brief for this meeting | Sent with every answer |
 | Instructions | Tone, length, what to stress or avoid | Sent with every answer |
 | Prepared answers | Questions you expect, each with the answer you want to give: typed one at a time, pasted as `Q:` / `A:` pairs, or dropped as a file (Word, PDF, Markdown or text with numbered questions, questions as headings or in bold, or `Q:` / `A:`; or a CSV with question and answer columns) | Offered with every question, closest first (about 16,000 characters fit, roughly 30 answers); when the question asked is the same or similar, the reply is built on your answer |
-| Questions to ask | The questions you want to ask them, one per line | Sent with every answer; when they invite your questions, two or three that fit the conversation are suggested, leaving out any already answered |
+| Questions to ask | The questions you want to ask them, one per line | Sent with every answer; when they invite your questions, the whole list is shown less any the conversation already answered, with one or two more that follow from what they said |
 | Publications | Your papers: add the PDF or Word file; type how you sum each one up | Searched section by section (methods, results, limitations); each paper's title and abstract, and what you typed, sent with every answer |
 | Portfolio | Repositories, your portfolio site, folders, long documents | Searched; matching passages are used |
 | Equipped | Nothing to fill in: it shows what the above adds up to | |

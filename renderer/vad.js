@@ -54,12 +54,14 @@
 
   // Cuts one side's audio into utterances and hands each to onUtterance(pcm).
   //   detect(block) -> chance of speech; start / stay: the chance needed to begin and to continue.
+  //   pause: how many quiet blocks (32 ms each) end an utterance. Shorter means the answer
+  //   starts sooner; too short cuts people off between phrases.
   //   masked(): true while the other side is audible (the microphone hearing the speakers).
-  // An utterance ends on a pause. A long turn is cut at a breath so text keeps coming, and
+  // An utterance ends on that pause. A long turn is cut at a breath so text keeps coming, and
   // recording carries straight on, so nothing between two pieces is lost.
   class Segmenter {
-    constructor({ detect, onUtterance, onLevel = () => {}, onSpeaking = () => {}, onProblem = () => {}, masked = null, start = 0.5, stay = 0.35 }) {
-      Object.assign(this, { detect, onUtterance, onLevel, onSpeaking, onProblem, masked, start, stay });
+    constructor({ detect, onUtterance, onLevel = () => {}, onSpeaking = () => {}, onProblem = () => {}, masked = null, start = 0.5, stay = 0.35, pause = 22 }) {
+      Object.assign(this, { detect, onUtterance, onLevel, onSpeaking, onProblem, masked, start, stay, pause });
       this.pre = []; this.cur = null; this.hot = 0; this.n = 0; this.heardAt = -1e9;
       this.chain = Promise.resolve();
     }
@@ -99,7 +101,7 @@
       if (p >= this.stay) { c.voiced++; c.quiet = 0; } else c.quiet++;
       if (this.masked && this.masked()) c.masked++;
       const seconds = c.blocks.length * BLOCK_MS / 1000;
-      if (c.quiet >= 22) this._finish();                                          // a real pause (0.7 s): the thought is over
+      if (c.quiet >= this.pause) this._finish();                                  // a real pause: the thought is over
       else if ((seconds > 9 && c.quiet >= 8) || seconds > 18) this._finish(true); // a long turn: cut at a breath and carry on
     }
 
@@ -115,7 +117,7 @@
       const keep = c.blocks.length - Math.max(0, c.quiet - 6); // leave ~200 ms of trailing silence
       const pcm = new Float32Array(keep * BLOCK);
       for (let i = 0; i < keep; i++) pcm.set(c.blocks[i], i * BLOCK);
-      this.onUtterance(pcm);
+      this.onUtterance(pcm, c.quiet * BLOCK_MS); // and how long ago the speech in it ended
     }
 
     // True while this side was speaking within the last quarter of a second.

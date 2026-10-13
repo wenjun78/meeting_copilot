@@ -18,10 +18,14 @@ const TRAILING_WORD = /\b(the|a|an|of|to|and|or|but|in|on|at|for|with|from|by|th
 //   'answer'     {type:'start'|'sources'|'delta'|'done'|'error', id, ...}
 //   'notice'     {level:'error'|'info', message}
 class Copilot extends EventEmitter {
-  constructor({ getConfig, llm, kb, liveSearch, debounceMs = 900 }) {
+  // debounceMs: how long after a finished question the answer starts. By then the pause has
+  // already lasted through the silence that ended the utterance and its transcription, so
+  // this only needs to cover a new utterance starting. trailMs: the longer wait when the
+  // sentence trails off and more is probably coming.
+  constructor({ getConfig, llm, kb, liveSearch, debounceMs = 250, trailMs = Math.round(debounceMs * 3.6) }) {
     super();
     this.getConfig = getConfig; this.llm = llm; this.kb = kb; this.liveSearch = liveSearch;
-    this.debounceMs = debounceMs;
+    this.debounceMs = debounceMs; this.trailMs = trailMs;
     this.entries = [];
     this.screenText = '';
     this.seq = 0;
@@ -57,9 +61,10 @@ class Copilot extends EventEmitter {
   }
 
   // A finished stretch of speech from one side. who: 'them' | 'you'
-  async onSegment(who, wav, durationMs = 0) {
+  // quietMs: how long the silence after it had already lasted when the piece was cut.
+  async onSegment(who, wav, durationMs = 0, quietMs = 0) {
     const generation = this.generation || 0;
-    const entry = { id: ++this.seq, who, text: '', t: Date.now() - durationMs, dur: durationMs, pending: true };
+    const entry = { id: ++this.seq, who, text: '', t: Date.now() - durationMs, dur: durationMs, ended: Date.now() - quietMs, pending: true };
     this.entries.push(entry);
     this.emit('transcript', { type: 'add', entry: { ...entry } });
     if (who === 'them') { this.pendingThem++; clearTimeout(this.timer); }
@@ -75,7 +80,7 @@ class Copilot extends EventEmitter {
     if (!text || (who === 'you' && this._isEchoOfThem(entry, text))) {
       this._remove(entry);
     } else {
-      entry.text = text; entry.pending = false;
+      entry.text = text; entry.pending = false; entry.heard = Date.now();
       this.emit('transcript', { type: 'update', entry: { ...entry } });
       if (who === 'them') this._dropEchoesOf(entry);
     }
@@ -165,7 +170,7 @@ class Copilot extends EventEmitter {
     this.timer = setTimeout(() => {
       if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
       if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
-    }, this.debounceMs * (trailsOff ? 2.2 : 1));
+    }, trailsOff ? this.trailMs : this.debounceMs);
   }
 
   _notice(level, message) {
@@ -180,6 +185,8 @@ class Copilot extends EventEmitter {
     if (this.abort) this.abort.abort();
     const id = ++this.answerSeq;
     const cfg = this.getConfig();
+    const begun = Date.now();
+    let spoken = null; // when the words being answered ended, and when their transcript arrived
 
     let asked = question.trim();
     if (mode === 'auto' || mode === 'manual') {
@@ -195,6 +202,8 @@ class Copilot extends EventEmitter {
       }
       asked = this._withContinuation(run);
       this.lastAnsweredId = run[run.length - 1].id;
+      const last = run[run.length - 1];
+      spoken = { end: last.ended || last.t + last.dur, heard: last.heard || Date.now() };
     }
     if (mode === 'screen') {
       if (!this.screenText) {
@@ -238,10 +247,11 @@ class Copilot extends EventEmitter {
         ],
       });
 
+      let firstWords = 0;
       const send = (lean) => this.llm.chatStream(this._buildMessages({ asked, mode, refs, prepared, cfg, lean }), {
         signal: ctl.signal,
         maxTokens: cfg.answerLength === 'detailed' ? 1800 : 1000, // headroom for reasoning models; the prompt sets the real length
-        onDelta: (piece) => this.emit('answer', { type: 'delta', id, text: piece }),
+        onDelta: (piece) => { if (!firstWords) firstWords = Date.now(); this.emit('answer', { type: 'delta', id, text: piece }); },
       });
       let lean = cfg.answerContext === 'lean';
       let text;
@@ -256,7 +266,12 @@ class Copilot extends EventEmitter {
       if (!text.trim()) throw new Error('The model returned no text. Try again, or check the chat model name in Settings.');
       this.lastError = '';
       // Remembered so a follow-up ("make it shorter", "and the second point?") has something to refer to.
-      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim() });
+      // Where the time went, for an answer to something they said: from the end of their
+      // words to the transcript (the silence that showed they had stopped, and transcription), from
+      // there to starting (waiting to see whether they carry on), and from there to the first
+      // words (search and the model).
+      const timing = spoken && firstWords ? { heard: spoken.heard - spoken.end, wait: begun - spoken.heard, first: firstWords - begun } : null;
+      this.history.push({ t: Date.now(), mode, question: mode === 'screen' ? (question.trim() || 'what is on the shared screen') : asked, answer: text.trim(), ...(timing ? { timing } : {}) });
       if (this.history.length > 60) this.history.shift();
       this.emit('answer', { type: 'done', id, text });
       return text;
@@ -273,7 +288,7 @@ class Copilot extends EventEmitter {
     let vec = null;
     if (this.llm.embedConfigured() && this.kb.stats().embedded) {
       try {
-        const t = AbortSignal.timeout(1500);
+        const t = AbortSignal.timeout(700); // a slow lookup is not worth holding the answer for: keywords still search
         vec = (await this.llm.embed([query], { signal: AbortSignal.any([signal, t]) }))[0];
       } catch { /* fall back to keyword search */ }
     }
@@ -305,7 +320,7 @@ class Copilot extends EventEmitter {
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
       '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
       '- "Answers I prepared" are replies the user wrote in advance for questions they expect; what they state is the user\'s own fact. When what is asked is the same question as one of them, or close to it in meaning even if worded differently, build the reply on that prepared answer: keep its facts, examples, numbers and stance, fit it to the format and to exactly what was asked, and do not swap in other material or add a "Check:" line for what it states. When two apply, combine them. When none is close to the question, leave them out.',
-      '- "Questions I want to ask the other side" in the pinned notes are the user\'s own questions for the people they are meeting. When the other side invites questions ("do you have any questions for us?", "anything you would like to ask?") or the user asks what to ask, reply with one short opening line and then two or three of those questions as bullets, worded to be said aloud: choose the ones that fit what was discussed, leave out any the conversation has already answered, and tie one to something the other side said when that is natural. Never answer these questions yourself, and do not bring them up at any other time.',
+      '- "Questions I want to ask the other side" in the pinned notes are the user\'s own questions for the people they are meeting. When the other side invites questions ("do you have any questions for us?", "anything you would like to ask?") or the user asks what to ask: write one short opening line, then every one of those questions that the conversation has not already answered, each as its own bullet, in the user\'s order and close to the user\'s wording (the limits on bullets and words do not apply to this reply). Leave out the ones the other side has already answered and end the list with one line starting "Skipped:" naming them in a few words each with what was said ("Skipped: team size (she said five)"); omit that line when none were answered. Then, under a line "Also worth asking:", add one or two further questions that follow from something the other side said in this conversation. Never answer these questions yourself, and do not bring them up at any other time.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
       '- "Tell me about a time ..." questions: use a real example from the notes if one fits. If none does, name the closest real project and lay out how to tell it (situation, what I did, result) without making up the details, and add "Check:" saying the example needs the user\'s own specifics.',
@@ -352,7 +367,9 @@ class Copilot extends EventEmitter {
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
     // Prepared answers, closest first, as many as fit. In lean mode only the closest few.
     const ready = [];
-    let space = lean ? 1500 : 16000;
+    // Ranked by meaning the right one is near the top, so fewer are needed (a shorter request
+    // is answered sooner); ranked by wording alone, more are sent to be safe.
+    let space = lean ? 1500 : prepared.some(x => x.byMeaning) ? 9000 : 16000;
     for (const p of prepared) {
       const item = `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`;
       if (item.length > space) { if (ready.length) break; continue; }
@@ -375,7 +392,7 @@ class Copilot extends EventEmitter {
     const at = (t) => `[${new Date(t).toLocaleTimeString()}]`;
     const said = this.entries.filter(e => !e.pending).map(e => ({ t: e.t, text: `${at(e.t)} ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}` }));
     const answers = this.history.map(h => ({ t: h.t || 0,
-      text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
+      text: `${at(h.t || Date.now())} Suggested answer${h.mode === 'typed' ? ` (you asked: ${h.question})` : h.mode === 'screen' ? ' (from the screen)' : ''}${h.timing ? ` (first words ${((h.timing.heard + h.timing.wait + h.timing.first) / 1000).toFixed(1)} s after they stopped)` : ''}:\n${h.answer.split('\n').map(l => '    ' + l).join('\n')}` }));
     return [...said, ...(withAnswers ? answers : [])].sort((a, b) => a.t - b.t).map(x => x.text).join('\n');
   }
 }

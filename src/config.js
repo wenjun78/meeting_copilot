@@ -16,7 +16,7 @@ const DEFAULTS = {
   embed: { baseUrl: '', apiKey: '', model: '' },
   github: { token: '', apiBase: 'https://api.github.com' },
   api: { searchUrl: '', headerName: 'Authorization', headerValue: '' },
-  capture: { micDeviceId: '', themSource: 'system', ocrIntervalSec: 4, ocrLangs: 'eng' },
+  capture: { micDeviceId: '', themSource: 'system', ocrIntervalSec: 4, ocrLangs: 'eng', record: false }, // record: keep the meeting's audio as a file
   shortcuts: { ...SHORTCUTS },         // '' turns one off
   ui: { opacity: 1, bounds: null, onTop: true },
 };
