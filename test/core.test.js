@@ -1099,13 +1099,13 @@ test('an answer is not started over for a few trailing words, and waits longer w
   await say('In SQL.');
   await wait(80);
   assert.equal(lines.length, 2);
-  assert.equal(lines[1], 'How do you handle duplicate customer records? In SQL.');
+  assert.equal(lines[1], 'How do you handle duplicate customer records? Take your time. Okay, no rush, whenever you are ready. In SQL.', 'the whole turn is the question');
   lines.pop();
   // More of the question: answered again, as one question.
   await say('And how would that change with ten times the data?');
   await wait(80);
   assert.equal(lines.length, 2);
-  assert.match(lines[1], /^How do you handle duplicate customer records\? In SQL\. And how would that change with ten times the data\?$/);
+  assert.match(lines[1], /^How do you handle duplicate customer records\? .*In SQL\. And how would that change with ten times the data\?$/);
 
   // A sentence that trails off is given longer; when the rest arrives it is answered once, whole.
   co.reset(); lines.length = 0;
@@ -1422,4 +1422,79 @@ test('live transcription: words arrive while they speak, the final text at the p
   assert.equal(new ConfigStore(file).load().stt.model, 'whisper-large-v3');
   fs.writeFileSync(file, JSON.stringify({ defaults: 3, stt: { model: 'gpt-4o-transcribe' } }));
   assert.equal(new ConfigStore(file).load().stt.model, 'gpt-4o-transcribe', 'chosen after the change: kept');
+});
+
+test('the question is their whole turn: everything they said since the user last spoke', async () => {
+  const waiting = [], asked = [], prompts = [];
+  const llm = {
+    transcribe: () => new Promise((resolve) => waiting.push(resolve)),
+    chatStream: async (messages, { onDelta }) => {
+      prompts.push(messages[1].content);
+      asked.push((/(?:They just said: |since I last spoke[^\n]*\n)"([\s\S]*?)"\nWrite what I should say\./.exec(messages[1].content) || [])[1]);
+      onDelta('ok'); return 'ok';
+    },
+    embedConfigured: () => false,
+  };
+  const cfg = { autoAnswer: 'questions', answerLength: 'short', stt: { vocabulary: '' }, api: { searchUrl: '' } };
+  const searched = [];
+  const kb = new KnowledgeBase(null);
+  kb.search = (q) => { searched.push(q); return []; };
+  const co = new Copilot({ getConfig: () => cfg, llm, kb, debounceMs: 20 });
+  const say = async (who, text, ms = 3000) => { const p = co.onSegment(who, Buffer.from('x'), ms); waiting.shift()(text); await p; };
+  const settle = () => new Promise(r => setTimeout(r, 90));
+  // Pieces are given their place in time afterwards: each `gap` seconds after the one before ended.
+  let clock = Date.now() - 600000;
+  const place = (gap = 0.3) => { const e = co.entries.at(-1); clock += gap * 1000; e.t = clock; clock += e.dur; };
+
+  // The start of the meeting: an introduction, then the question. All of it is the question.
+  await say('them', 'Thank you for joining. My name is Phuong and I look after hiring for the people team.'); place();
+  await say('them', 'Perhaps a quick introduction about yourself would be great?'); place();
+  await settle();
+  assert.equal(asked.at(-1), 'Thank you for joining. My name is Phuong and I look after hiring for the people team. Perhaps a quick introduction about yourself would be great?');
+
+  // The user answers. From here on, her next turn is the question, however long.
+  await say('you', 'My background brings together data science and AI in education and at Lenovo.', 8000); place(1);
+  const pieces = [];
+  co.setSpeaking('them', true);
+  for (let i = 1; i <= 14; i++) {
+    const text = i < 14 ? `Part ${i} of the scenario: a director says attrition rose in market ${i} and blames pay.` : 'So how would you approach this request?';
+    pieces.push(text);
+    await say('them', text, 9000); place(0.4);
+    // The microphone hears a little of her from the speakers; that is not the user taking a turn.
+    if (i === 6) { await say('you', 'a director says attrition rose in market', 3000); const echo = co.entries.at(-1); if (echo && echo.who === 'you') { echo.t = co.entries.at(-2).t + 1000; } }
+    if (i === 9) { await say('you', 'Mm-hm.', 400); place(0); }
+  }
+  co.setSpeaking('them', false);
+  await new Promise(r => setTimeout(r, 480));
+  assert.equal(asked.at(-1), pieces.join(' '), 'all fourteen pieces, two minutes of talk, are the question');
+  assert.ok(!asked.at(-1).includes('Phuong'), 'what came before the user spoke is not part of it');
+  assert.match(prompts.at(-1), /Everything they have said since I last spoke \(the question is usually at the end/);
+  // It is searched by its end, where the question is.
+  assert.ok(searched.at(-1).length <= 700 && /So how would you approach this request\?$/.test(searched.at(-1)) && !/Part 1 of/.test(searched.at(-1)), searched.at(-1));
+
+  // The user answers; she adds a remark much later (no question): nothing restarts.
+  const before = asked.length;
+  await say('you', 'I would first check whether fifteen percent is comparable with earlier quarters.', 9000); place(1);
+  await say('them', 'I see, that makes sense.'); place(1);
+  await settle();
+  assert.equal(asked.length, before);
+  // Then a new question: the turn since the user spoke, remark included.
+  await say('them', 'What data would you capture as a standard?'); place(0.5);
+  await settle();
+  assert.equal(asked.at(-1), 'I see, that makes sense. What data would you capture as a standard?');
+
+  // With no microphone at all the turn never ends by itself: two minutes of silence start a new
+  // one, and a turn is never more than about five minutes of talk.
+  co.reset(); clock = Date.now() - 3600000;
+  await say('them', 'Earlier topic, long ago. What is your notice period?'); place();
+  await settle();
+  await say('them', 'Now a different question after a long silence: when could you start?'); place(150);
+  await settle();
+  assert.equal(asked.at(-1), 'Now a different question after a long silence: when could you start?');
+  co.setSpeaking('them', true);
+  for (let i = 0; i < 70; i++) { await say('them', `Sentence ${i} of a very long talk that goes on and on without any pause from the speaker.`, 5000); place(0.2); }
+  co.setSpeaking('them', false);
+  await say('them', 'So what do you think?'); place(0.2);
+  await new Promise(r => setTimeout(r, 480));
+  assert.ok(asked.at(-1).length > 3000 && asked.at(-1).length < 5300 && /So what do you think\?$/.test(asked.at(-1)) && !/Sentence 0 of/.test(asked.at(-1)), `${asked.at(-1).length} characters`);
 });

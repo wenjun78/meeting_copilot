@@ -95,7 +95,7 @@ function renderAnswer() {
   $('asked').hidden = !a.question && a.mode !== 'screen';
   $('asked').textContent = a.mode === 'typed' ? `You asked: ${a.question}`
     : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : a.reading ? 'Reading the screen' : 'Answering what is on the screen')
-      : `They said: ${a.question}`;
+      : `They said: ${tailOf(a.question)}`;
   $('asked').className = 'asked' + (a.mode === 'typed' || a.mode === 'screen' ? ' mine' : '');
   if (a.status === 'error') { card.className = 'card fail'; card.textContent = a.error; }
   else if (!a.text && a.stale) { card.className = 'card stale'; renderAnswerText(card, a.stale, a.staleSources); card.prepend(el('p', { class: 'updating', text: 'They added to the question. Updating the answer' })); }
@@ -134,7 +134,9 @@ window.mc.on('answer', (e) => {
 // Each finished answer is added to the transcript where it was given, and listed under
 // the current answer (in the wide layout) so an earlier one can be read again.
 const answerLog = [];
-const askedLabel = (a) => (a.mode === 'typed' ? `You asked: ${a.question}` : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : 'From the screen') : `They said: ${a.question}`);
+// A long turn is shown by its end, where the question is.
+const tailOf = (q) => (q && q.length > 260 ? `… ${q.slice(-240).replace(/^\S*\s/, '')}` : q);
+const askedLabel = (a) => (a.mode === 'typed' ? `You asked: ${a.question}` : a.mode === 'screen' ? (a.question ? `About the screen: ${a.question}` : 'From the screen') : `They said: ${tailOf(a.question)}`);
 function logAnswer(a) {
   if (!a.text || !a.text.trim() || answerLog.some(x => x.id === a.id)) return;
   const item = { id: a.id, t: Date.now(), mode: a.mode, question: a.question || '', text: a.text, sources: a.sources || [] };

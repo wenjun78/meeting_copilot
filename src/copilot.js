@@ -35,7 +35,6 @@ class Copilot extends EventEmitter {
     this.timer = null;
     this.abort = null;
     this.lastError = '';
-    this.lastRun = null;
     this.history = [];   // earlier questions and the answers suggested for them, oldest first
     this.speakingThem = false;
     this.generation = 0;
@@ -46,7 +45,7 @@ class Copilot extends EventEmitter {
   reset() {
     clearTimeout(this.timer);
     if (this.abort) this.abort.abort();
-    this.entries = []; this.lastAnsweredId = 0; this.lastRun = null; this.history = [];
+    this.entries = []; this.lastAnsweredId = 0; this.history = [];
     this.pendingThem = 0; this.speakingThem = false;
     this.generation = (this.generation || 0) + 1; // segments still being transcribed belong to the old meeting
   }
@@ -141,48 +140,59 @@ class Copilot extends EventEmitter {
 
   setScreenText(text) { this.screenText = String(text || '').trim(); }
 
-  // The other side's most recent run of speech that has not been answered yet.
-  // A brief "yeah" or "mm-hm" from the user does not break the run; a real reply does.
-  _latestThemRun() {
+  // Whether something the microphone picked up is the user taking their turn: a real
+  // reply, not a "yeah" or "mm-hm", and not said over the other side (their voice from the
+  // speakers, or a word of agreement while they talk).
+  _isOwnTurn(you) {
+    if (tokenize(you.text).length < 4) return false;
+    const start = you.t, end = you.t + (you.dur || 0);
+    if (end <= start) return true;
+    let over = 0;
+    for (const e of this.entries) {
+      if (e.who !== 'them' || e.pending) continue;
+      over += Math.max(0, Math.min(end, e.t + (e.dur || 0)) - Math.max(start, e.t));
+    }
+    return over / (end - start) < 0.6;
+  }
+
+  // Their turn: everything the other side has said since the user last spoke, however long
+  // and in however many pieces. That is the question, with its set-up; at the start of a
+  // meeting, before the user has said anything, it is what they have said so far.
+  // Bounded only against a silent or missing microphone: a gap of two minutes starts a new
+  // turn, and at most about five minutes of talk is taken.
+  // -> { run: its pieces in order, fresh: those not yet answered, answeredEnd: when the answered part ended (0 if none) }
+  _theirTurn() {
     const run = [];
+    let chars = 0;
     for (let i = this.entries.length - 1; i >= 0; i--) {
       const e = this.entries[i];
       if (e.pending) continue;
-      if (e.who === 'you') { if (tokenize(e.text).length < 4) continue; break; }
-      if (e.id <= this.lastAnsweredId) break;
-      if (run.length && run[0].t - e.t > 30000) break;
-      run.unshift(e);
-      if (run.length >= 8) break; // a long question arrives in several pieces
+      if (e.who === 'you') { if (this._isOwnTurn(e)) break; continue; }
+      if (run.length && run[0].t - (e.t + (e.dur || 0)) > 120000) break;
+      run.unshift(e); chars += e.text.length;
+      if (chars > 5000 || run.length >= 60) break;
     }
-    return run;
-  }
-
-  // If they carry on right after an answer was started, the new words belong to the same
-  // question: answer the whole thing rather than the tail on its own.
-  _withContinuation(run) {
-    const prev = this.lastRun;
-    const joined = prev && run.length && run[0].t - prev.end < 6000 && Date.now() - prev.at < 20000;
-    const text = (joined ? prev.text + ' ' : '') + run.map(e => e.text).join(' ');
-    const last = run[run.length - 1];
-    this.lastRun = { text, end: last.t + last.dur, at: Date.now() };
-    return text;
+    const fresh = run.filter(e => e.id > this.lastAnsweredId);
+    const answered = run.filter(e => e.id <= this.lastAnsweredId);
+    const lastAnswered = answered[answered.length - 1];
+    return { run, fresh, answeredEnd: lastAnswered ? lastAnswered.t + (lastAnswered.dur || 0) : 0 };
   }
 
   _maybeAutoAnswer() {
     if (this.getConfig().autoAnswer !== 'questions' || this.pendingThem > 0 || this.speakingThem) return;
-    const run = this._latestThemRun();
-    if (!run.length) return;
-    const prev = this.lastRun;
-    const context = prev && run[0].t - prev.end < 6000 ? prev.text + ' ' : '';
-    const said = run.map(e => e.text).join(' ');
-    if (!detectQuestion(context + said).ask) return;
+    const { run, fresh, answeredEnd } = this._theirTurn();
+    if (!fresh.length) return;
+    const said = fresh.map(e => e.text).join(' ');
+    // Carrying straight on from what was already answered, the new words belong to that
+    // question and the whole turn decides. After a longer gap they have to ask something
+    // themselves: a remark added later ("We are a team of five.") does not restart the answer.
+    const carriesOn = answeredEnd > 0 && fresh[0].t - answeredEnd < 6000;
+    if (!detectQuestion(carriesOn || !answeredEnd ? run.map(e => e.text).join(' ') : said).ask) return;
     // Words of courtesy tacked on after the question was already taken up ("Take your time.",
     // "Right, okay.") are not a reason to start the answer over. Anything else is, however
     // short: "In SQL." changes what the answer should be.
-    if (context && COURTESY.test(said.trim())) {
-      const last = run[run.length - 1];
-      this.lastAnsweredId = last.id;
-      this.lastRun = { ...prev, end: last.t + last.dur };
+    if (carriesOn && COURTESY.test(said.trim())) {
+      this.lastAnsweredId = fresh[fresh.length - 1].id;
       return;
     }
     clearTimeout(this.timer);
@@ -190,11 +200,11 @@ class Copilot extends EventEmitter {
     // not finished: wait longer before answering, so the answer is not started twice.
     // (Chinese is often written down without a closing mark, so there only an explicit
     // trailing-off counts.)
-    const cjk = /[\u4E00-\u9FFF]/.test(said);
+    const cjk = /[一-鿿]/.test(said);
     const trailsOff = /(\.\.\.|…|,|，)\s*$/.test(said) || (!cjk && (!/[.?!]["”')]?\s*$/.test(said) || TRAILING_WORD.test(said.replace(/[.\s]+$/, ''))));
     this.timer = setTimeout(() => {
       if (this.pendingThem > 0 || this.speakingThem) return; // they kept talking; the next segment reschedules
-      if (this._latestThemRun().length) this.answer({ mode: 'auto' }).catch(() => {});
+      if (this._theirTurn().fresh.length) this.answer({ mode: 'auto' }).catch(() => {});
     }, trailsOff ? this.trailMs : this.debounceMs);
   }
 
@@ -215,9 +225,10 @@ class Copilot extends EventEmitter {
 
     let asked = question.trim();
     if (mode === 'auto' || mode === 'manual') {
-      let run = this._latestThemRun();
+      // The question is their whole turn: all they have said since the user last spoke.
+      let { run } = this._theirTurn();
       if (!run.length && mode === 'manual') {
-        // Nothing new: answer the last thing they said again.
+        // The user has spoken since: answer the last thing they said again.
         const last = [...this.entries].reverse().find(e => e.who === 'them' && !e.pending);
         if (last) run = [last];
       }
@@ -225,7 +236,7 @@ class Copilot extends EventEmitter {
         this.emit('answer', { type: 'error', id, message: 'Nothing from the other side to answer yet.' });
         return '';
       }
-      asked = this._withContinuation(run);
+      asked = run.map(e => e.text).join(' ');
       this.lastAnsweredId = run[run.length - 1].id;
       const last = run[run.length - 1];
       spoken = { end: last.ended || last.t + last.dur, heard: last.heard || Date.now() };
@@ -246,7 +257,9 @@ class Copilot extends EventEmitter {
 
     try {
       // Retrieval: the question, plus a little context when the question alone is too thin to search on.
-      let query = asked;
+      // A long turn is searched by its end, where the question is; the set-up before it
+      // would pull in passages about everything they mentioned on the way.
+      let query = asked.length > 700 ? asked.slice(-700).replace(/^\S*\s/, '') : asked;
       if (mode === 'screen') query = `${question} ${this.screenText.slice(0, 500)}`;
       else if (mode === 'typed' && tokenize(asked).length < 5 && this.history.length) {
         query = `${asked} ${this.history[this.history.length - 1].question}`;
@@ -407,7 +420,9 @@ class Copilot extends EventEmitter {
     } else parts.push('Reference material: none found for this question.');
     parts.push(mode === 'screen'
       ? `What I need: ${asked}\nBase the reply on the shared-screen text above. It is raw OCR of the whole screen, so ignore menus, toolbars, participant names and other clutter, and repair obvious OCR slips in names and code.`
-      : mode === 'typed' ? `My question: ${asked}` : `They just said: "${asked}"\nWrite what I should say.`);
+      : mode === 'typed' ? `My question: ${asked}`
+        : asked.length > 400 ? `Everything they have said since I last spoke (the question is usually at the end; what comes before sets it up, and every part of it counts):\n"${asked}"\nWrite what I should say.`
+          : `They just said: "${asked}"\nWrite what I should say.`);
     return [{ role: 'system', content: system }, { role: 'user', content: parts.join('\n\n') }];
   }
 
