@@ -264,6 +264,11 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     step('recorder accepts the default', { field: await js(`document.getElementById('s-key-answer').value`), hint: await js(`document.getElementById('keyHint').textContent`) });
     await js(`document.querySelector('[data-tab=transcript]').click()`);
 
+    // Recording is turned on from the record button in the title bar: armed before the call, running once it starts.
+    await js(`document.getElementById('record').click()`);
+    await waitFor('recording armed', () => js(`document.getElementById('record').getAttribute('aria-pressed') === 'true' && document.getElementById('s-record').checked`));
+    step('record button', { armed: await js(`document.getElementById('record').title`), toast: await js(`[...document.querySelectorAll('.toast')].map(t => t.textContent).find(t => /Recording/.test(t)) || ''`) });
+
     await js(`document.getElementById('toggle').click()`);
     await waitFor('picker', () => js(`!document.getElementById('picker').hidden`));
     const listed = await js(`[...document.querySelectorAll('.pick span')].map(s => s.textContent)`);
@@ -287,6 +292,10 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await waitFor('words while speaking', () => js(`[...document.querySelectorAll('.line.them.pending p')].some(p => /\\w{2,}/.test(p.textContent))`), 20000);
     step('live transcription', { whileSpeaking: await js(`([...document.querySelectorAll('.line.them.pending p')].map(p => p.textContent)[0] || '(already final)')`) });
     await waitFor('transcript line', () => js(`document.querySelectorAll('.line.them:not(.pending)').length > 0`));
+    // The prepared answer for this question shows the moment it is found, before the model's words arrive.
+    const prepared = await waitFor('prepared answer shown', () => js(`(document.querySelector('#card.stale .updating') && /prepared answer/i.test(document.querySelector('#card.stale .updating').textContent) && document.getElementById('card').innerText) || (document.querySelector('#card:not(.idle):not(.wait):not(.fail) .lead') && 'missed')`), 20000);
+    step('prepared answer at once', { card: prepared.slice(0, 120), auto: await js(`document.getElementById('autoAnswer').checked`), recording: await js(`document.getElementById('record').classList.contains('on')`) });
+    if (prepared === 'missed' || !/Two passes: exact match on tax ID/.test(prepared)) throw new Error('the prepared answer was not shown while the reply was written');
     await waitFor('answer', () => js(`document.querySelector('#card:not(.idle):not(.wait):not(.fail) .lead') && !document.getElementById('copy').hidden`));
     step('answer', {
       asked: await js(`document.getElementById('asked').textContent`),
@@ -348,11 +357,11 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=transcript]').click()`);
     win.setBounds({ x: 0, y: 0, width: 1500, height: 860 });
     await new Promise(r => setTimeout(r, 500));
-    // Two ways to save: what was said, or that with the answers.
-    const saves = await js(`[document.getElementById('exportBtn').textContent, document.getElementById('exportAllBtn').textContent]`);
-    const plain = copilot.transcriptText({ answers: false });
-    step('save choices', { saves, transcriptOnlyHasAnswers: /Suggested answer/.test(plain), lines: plain.split('\n').length });
-    if (saves.join('|') !== 'Save transcript|Save with answers' || /Suggested answer/.test(plain) || !/Them: /.test(plain)) throw new Error('the transcript cannot be saved on its own');
+    // One save, with what was said and every answer in it; the buttons stay in view while the transcript scrolls.
+    const saved = copilot.transcriptText();
+    const foot = await js(`(() => { const f = document.querySelector('#tab-transcript .panel-foot'); return { sticky: getComputedStyle(f).position, buttons: [...f.querySelectorAll('button')].map(b => b.textContent) }; })()`);
+    step('save', { ...foot, hasAnswers: /Suggested answer/.test(saved), hasSpeech: /Them: /.test(saved) });
+    if (foot.sticky !== 'sticky' || foot.buttons.join('|') !== 'Save transcript|Clear for a new meeting' || !/Suggested answer/.test(saved) || !/Them: /.test(saved)) throw new Error('the transcript save is not as expected');
 
     // Conversation log: earlier answers sit under the current one in the wide layout, every
     // answer is in the transcript where it was given, and the saved log carries them too.
@@ -370,15 +379,21 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     if (log.shown !== 'flex' || !log.earlier.length || !/duplicate/i.test(log.earlier[log.earlier.length - 1].asked) || log.earlier.some(x => x.asked === log.onCard) || log.inTranscript.length < 2 || !log.saved.some(l => /^Suggested answer/.test(l))) throw new Error('the conversation log is missing answers');
 
     const recShown = await js(`!document.getElementById('recState').hidden`);
+    // The record button stops the recording mid-call (its file is finished) and starts another.
+    await js(`document.getElementById('record').click()`);
+    await waitFor('first recording saved', () => js(`[...document.querySelectorAll('.toast')].some(t => /^Recording saved: .*\\.webm$/.test(t.textContent)) && !document.getElementById('record').classList.contains('on')`));
+    await js(`document.getElementById('record').click()`);
+    await waitFor('recording again', () => js(`document.getElementById('record').classList.contains('on') && !document.getElementById('recState').hidden`));
+    await new Promise(r => setTimeout(r, 4000)); // long enough for a piece of the second recording to be written
     await js(`document.getElementById('toggle').click()`);
     await waitFor('stopped', () => js(`!document.body.classList.contains('listening')`));
-    // The meeting was recorded: a WebM file that grew while listening, named when listening stopped.
-    await waitFor('recording saved', () => js(`[...document.querySelectorAll('.toast')].some(t => /^Recording saved: .*\\.webm$/.test(t.textContent))`));
+    // The meeting was recorded: WebM files that grew while listening, each finished when its recording stopped.
+    await waitFor('recording saved', () => js(`[...document.querySelectorAll('.toast')].filter(t => /^Recording saved: .*\\.webm$/.test(t.textContent)).length >= 2`));
     const recDir = path.join(app.getPath('userData'), 'recordings');
-    const recFiles = fs.readdirSync(recDir).map(f => ({ name: f, bytes: fs.statSync(path.join(recDir, f)).size, webm: fs.readFileSync(path.join(recDir, f)).subarray(0, 4).toString('hex') === '1a45dfa3' }));
+    const recFiles = fs.readdirSync(recDir).sort().map(f => ({ name: f, bytes: fs.statSync(path.join(recDir, f)).size, webm: fs.readFileSync(path.join(recDir, f)).subarray(0, 4).toString('hex') === '1a45dfa3' }));
     if (out && recFiles.length) fs.copyFileSync(path.join(recDir, recFiles[0].name), path.join(out, 'recording.webm')); // kept with the screenshots, to listen to
-    step('recording', { indicator: recShown, files: recFiles, settingShown: await js(`document.getElementById('s-record').checked`) });
-    if (!recShown || recFiles.length !== 1 || recFiles[0].bytes < 8000 || !recFiles[0].webm) throw new Error('the meeting was not recorded to a playable file');
+    step('recording', { indicator: recShown, files: recFiles, settingShown: await js(`document.getElementById('s-record').checked`), buttonAfter: await js(`document.getElementById('record').getAttribute('aria-pressed')`) });
+    if (!recShown || recFiles.length !== 2 || recFiles[0].bytes < 8000 || !recFiles.every(f => f.webm && f.bytes > 0)) throw new Error('the meeting was not recorded to playable files');
 
     // Stopping after a few words is not a call worth writing up: nothing is written.
     await new Promise(r => setTimeout(r, 1200));

@@ -874,29 +874,42 @@ test('Q&A: prepared answers are read from pasted text, kept one per question, an
   assert.deepEqual(kb.prepared(), pairs);
   assert.equal(kb.search('salary expectations', 3)[0].title, 'Prepared answer: What are your salary expectations?');
 
-  // Asked in a meeting: the prepared answers go to the model in their own block, the closest
-  // first, named among the sources, and not repeated as numbered references.
+  // Asked in a meeting: the whole list goes to the model in its own order (the same from one
+  // answer to the next, so the service can reuse it), the closest ones are named just before the
+  // question and among the sources, and none is repeated as a numbered reference.
   const s2 = await mock.start({ sttLines: ['So why are you leaving your current job?'], answer: 'I want to own models end to end.' });
   const getConfig = cfgFor({ llm: { baseUrl: s2.base + '/v1', apiKey: 'test-key', model: 'chat-model', extra: {} } });
   const co = new Copilot({ getConfig, llm: new LLM(getConfig), kb, debounceMs: 20 });
-  let sources = null;
-  co.on('answer', e => { if (e.type === 'sources') sources = e.sources; });
+  let sources = null, shown = null;
+  co.on('answer', e => { if (e.type === 'sources') sources = e.sources; if (e.type === 'prepared') shown = e; });
   await co.answer({ mode: 'typed', question: 'Why are you leaving your current job?' });
   const prompt = s2.log.chat.at(-1).messages[1].content;
-  const block = /Answers I prepared for questions I expect[^\n]*\n([\s\S]*?)\n\nReference material/.exec(prompt);
+  const block = /Answers I prepared for questions I expect \(my whole list\):\n([\s\S]*?)\n\nConversation so far|Answers I prepared for questions I expect \(my whole list\):\n([\s\S]*?)\n\nReference material/.exec(prompt);
   assert.ok(block, prompt);
-  assert.match(block[1], /^Q: Why do you want to leave your current role\?\nA: I want to own models end to end/);
-  assert.match(block[1], /Q: What is your biggest weakness\?[\s\S]*Q: What are your salary expectations\?/, 'the others are still offered, for questions worded differently');
+  assert.match(block[1] || block[2], /^Q: Why do you want to leave your current role\?\nA: I want to own models end to end[\s\S]*Q: What is your biggest weakness\?[\s\S]*Q: What are your salary expectations\?/, 'all of them, in the list\'s order');
+  assert.ok(prompt.indexOf('Pinned notes') < prompt.indexOf('Answers I prepared') && prompt.indexOf('Answers I prepared') < prompt.indexOf('Reference material'), 'the unchanging parts come first');
+  assert.match(prompt, /Reference material[\s\S]*Closest prepared answers to what was asked \(likeliest first\):\nQ: Why do you want to leave your current role\?\n\nMy question:/, 'the closest is named, without its text again, just before the question');
   assert.ok(!/\[\d+\] Prepared answer/.test(prompt), 'not repeated as a numbered reference');
   assert.match(s2.log.chat.at(-1).messages[0].content, /"Answers I prepared" are replies the user wrote in advance/);
   assert.deepEqual(sources.filter(x => x.n === 'Q').map(x => x.title), ['Prepared: Why do you want to leave your current role?']);
   assert.ok(sources.filter(x => x.n !== 'Q').every((x, i) => x.n === i + 1));
+  assert.deepEqual({ q: shown.q, a: shown.a }, { q: 'Why do you want to leave your current role?', a: pairs.find(p => /leave/.test(p.q)).a }, 'and shown at once, before the model answers');
 
-  // Lean mode sends only the closest two; with nothing prepared there is no block at all.
+  // Lean mode sends only the closest two, with their text; with nothing prepared there is no block at all.
   const lean = co._buildMessages({ asked: 'x', mode: 'typed', refs: [], prepared: rankPrepared(pairs, 'salary'), cfg: getConfig(), lean: true })[1].content;
   assert.equal((lean.match(/^Q: /gm) || []).length, 2);
-  assert.match(lean, /prepared[^\n]*\nQ: What are your salary expectations\?/);
-  assert.ok(!/Answers I prepared/.test(co._buildMessages({ asked: 'x', mode: 'typed', refs: [], cfg: getConfig() })[1].content));
+  assert.equal((lean.match(/^A: /gm) || []).length, 2);
+  assert.match(lean, /Closest prepared answers[^\n]*\nQ: What are your salary expectations\?/);
+  assert.ok(!/Answers I prepared/.test(lean));
+  assert.ok(!/prepared answers/i.test(co._buildMessages({ asked: 'x', mode: 'typed', refs: [], cfg: getConfig() })[1].content.replace(/Pinned notes[\s\S]*?\n\n/, '')));
+  // A list too long to send whole: the closest answer still arrives, with its text, before the question.
+  const many = Array.from({ length: 80 }, (_, i) => ({ q: `Question number ${i} about topic ${i}?`, a: 'x'.repeat(300) }));
+  const big = new KnowledgeBase(null);
+  big.prepared = () => [...many, { q: 'How do you handle duplicate records?', a: 'Two passes.' }];
+  const co2 = new Copilot({ getConfig, llm: new LLM(getConfig), kb: big, debounceMs: 20 });
+  const cut = co2._buildMessages({ asked: 'How do you handle duplicate records?', mode: 'typed', refs: [], prepared: rankPrepared(big.prepared(), 'How do you handle duplicate records?'), cfg: getConfig() })[1].content;
+  assert.ok(!/my whole list\):[\s\S]*Q: How do you handle duplicate records\?/.test(cut.split('Closest prepared')[0]), 'did not fit in the list');
+  assert.match(cut, /Closest prepared answers[^\n]*\nQ: How do you handle duplicate records\?\nA: Two passes\./);
   await s2.close();
 });
 
@@ -1046,7 +1059,7 @@ test('search by meaning: on by itself with OpenAI, and prepared answers are foun
   const before = srv.log.embed.length;
   await co.answer({ mode: 'typed', question: asked });
   assert.equal(srv.log.embed.length, before + 1);
-  assert.match(srv.log.chat.at(-1).messages[1].content, /Answers I prepared[^\n]*\nQ: How do you remove entries that appear twice\?/);
+  assert.match(srv.log.chat.at(-1).messages[1].content, /Closest prepared answers[^\n]*\nQ: How do you remove entries that appear twice\?/);
   assert.deepEqual(sources.filter(x => x.n === 'Q').map(x => x.title), ['Prepared: How do you remove entries that appear twice?']);
 });
 
@@ -1318,11 +1331,11 @@ test('answers start promptly after a finished question, and the saved log says w
   await co.answer({ mode: 'typed', question: 'And the threshold?' });
   assert.ok(!co.history[1].timing);
 
-  // Prepared answers ranked by meaning: fewer are sent, so the request is shorter.
-  const many = Array.from({ length: 40 }, (_, i) => ({ q: `Question number ${i} about topic ${i}?`, a: 'x'.repeat(600), score: 1 - i / 40, match: i === 0 }));
-  const count = (list) => (co._buildMessages({ asked: 'q', mode: 'typed', refs: [], prepared: list, cfg })[1].content.match(/^Q: /gm) || []).length;
-  const byWording = count(many), byMeaning = count(many.map(x => ({ ...x, byMeaning: true })));
-  assert.ok(byWording >= 24 && byMeaning >= 12 && byMeaning < byWording * 0.65, `${byWording} by wording, ${byMeaning} by meaning`);
+  // The request's opening is the same from one question to the next, so the service can reuse it.
+  const first = co._buildMessages({ asked: 'How do you handle duplicates?', mode: 'typed', refs: [], prepared: [], cfg })[1].content;
+  const second = co._buildMessages({ asked: 'And the threshold?', mode: 'typed', refs: [{ title: 'README', path: 'README.md', url: '', text: 'fuzzy match' }], prepared: [], cfg })[1].content;
+  const shared = [...first].findIndex((ch, i) => ch !== second[i]);
+  assert.ok(shared >= first.indexOf('Conversation so far') - 1, `${shared} characters shared, up to the conversation`);
 });
 
 test('live transcription: words arrive while they speak, the final text at the pause, and a recording is the fallback', async () => {

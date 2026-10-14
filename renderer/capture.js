@@ -56,21 +56,7 @@ class Capture {
     await this.ctx.audioWorklet.addModule('vad-worklet.js');
     this.sink = this.ctx.createGain(); this.sink.gain.value = 0; this.sink.connect(this.ctx.destination);
     this.segmenters = []; this.themSeg = null; this.live = !!opts.live;
-    // Recording: both sides mixed into one track, encoded as it goes and handed on in pieces
-    // every few seconds, so a crash loses seconds, not the meeting.
-    this.recMix = null; this.recorder = null;
-    if (opts.record) {
-      try {
-        const out = this.ctx.createMediaStreamDestination();
-        this.recMix = this.ctx.createGain(); this.recMix.gain.value = 0.7; // headroom for when both sides speak at once
-        this.recMix.connect(out);
-        this.recorder = new MediaRecorder(out.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 });
-        this.recorder.ondataavailable = async (e) => { if (e.data && e.data.size) this.hooks.onRecording(await e.data.arrayBuffer()); };
-      } catch (e) {
-        this.recMix = null; this.recorder = null;
-        result.problems.push(`The meeting is not being recorded (${e.message || e.name}).`);
-      }
-    }
+    this.sources = []; this.recMix = null; this.recorder = null;
     this.model = await speechModelOnce();
     if (!this.model) result.problems.push('Speech detection is running in basic mode (the speech model could not be loaded), so quiet speech may be missed. Restart the app; if this stays, reinstall it.');
 
@@ -114,8 +100,42 @@ class Capture {
     }
     this.running = result.mic || result.them || result.screen;
     if (!this.running) await this.stop();
-    if (this.recorder && (result.mic || result.them)) { this.recorder.start(3000); result.recording = true; } else this.recorder = null;
+    if (opts.record && (result.mic || result.them)) {
+      const problem = this.startRecording();
+      if (problem) result.problems.push(problem); else result.recording = true;
+    }
     return result;
+  }
+
+  // Recording: both sides mixed into one track, encoded as it goes and handed on in pieces
+  // every few seconds, so a crash loses seconds, not the meeting. Can begin and end at any
+  // point of a call. -> '' or why it could not start.
+  startRecording() {
+    if (this.recorder) return '';
+    if (!this.running || !this.ctx || !this.sources.length) return 'Nothing is being listened to yet, so there is nothing to record.';
+    try {
+      const out = this.ctx.createMediaStreamDestination();
+      this.recMix = this.ctx.createGain(); this.recMix.gain.value = 0.7; // headroom for when both sides speak at once
+      this.recMix.connect(out);
+      for (const src of this.sources) src.connect(this.recMix);
+      this.recorder = new MediaRecorder(out.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 });
+      this.recorder.ondataavailable = async (e) => { if (e.data && e.data.size) this.hooks.onRecording(await e.data.arrayBuffer()); };
+      this.recorder.start(3000);
+      return '';
+    } catch (e) {
+      this.recMix = null; this.recorder = null;
+      return `The call is not being recorded (${e.message || e.name}).`;
+    }
+  }
+
+  get recording() { return !!this.recorder; }
+
+  // Ends the recording; resolves once the last piece has been handed on.
+  async stopRecording() {
+    const rec = this.recorder; this.recorder = null;
+    if (!rec) return;
+    await new Promise((done) => { rec.onstop = () => setTimeout(done, 50); try { rec.stop(); } catch { done(); } });
+    if (this.recMix) { try { this.recMix.disconnect(); } catch { /* closed */ } this.recMix = null; }
   }
 
   // Opens the saved device, or the system default if that device is no longer connected.
@@ -162,6 +182,7 @@ class Capture {
     if (who === 'them') this.themSeg = seg;
     tap.port.onmessage = (e) => seg.push(e.data);
     src.connect(tap); tap.connect(this.sink); // the muted sink keeps the graph running
+    this.sources.push(src);
     if (this.recMix) src.connect(this.recMix); // both sides go into the recording, when one is being made
     this.segmenters.push(seg);
     for (const track of stream.getAudioTracks()) {
@@ -231,12 +252,9 @@ class Capture {
     this.refreshScreen = async () => false;
     clearInterval(this.screenTimer);
     for (const s of this.segmenters || []) s.flush();
-    if (this.recorder) {
-      const rec = this.recorder; this.recorder = null;
-      await new Promise((done) => { rec.onstop = () => setTimeout(done, 50); try { rec.stop(); } catch { done(); } }); // the last piece is handed on before the audio closes
-    }
+    await this.stopRecording(); // the last piece is handed on before the audio closes
     for (const s of this.streams) s.getTracks().forEach(t => t.stop());
-    this.streams = []; this.segmenters = [];
+    this.streams = []; this.segmenters = []; this.sources = [];
     if (this.ctx) { try { await this.ctx.close(); } catch { /* already closed */ } this.ctx = null; }
   }
 }

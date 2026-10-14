@@ -25,14 +25,13 @@ function fakeSpeechWav(file) {
 }
 
 (async () => {
-  const srv = await mock.start({ sttLines: ['How do you handle duplicate customer records?'] });
+  const srv = await mock.start({ sttLines: ['How do you handle duplicate customer records?'], firstTokenMs: 900 });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-e2e-'));
   const out = process.env.MC_E2E_OUT || path.join(tmp, 'out');
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     llm: { baseUrl: srv.base + '/v1', apiKey: 'test-key', model: 'mock-chat', extra: {} },
     github: { apiBase: srv.base + '/gh' },
-    capture: { record: true },
   }));
   const wav = path.join(tmp, 'speech.wav'); fakeSpeechWav(wav);
   // MC_E2E_BIN runs the test against a packaged build instead of the source tree.

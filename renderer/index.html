@@ -3,18 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:">
-<title>Meeting Copilot</title>
+<title>Cue</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <header class="bar">
   <div class="brand">
     <span class="live" id="live" aria-hidden="true"></span>
-    <span class="name">Meeting Copilot</span>
+    <span class="name">Cue</span>
     <span class="clock" id="clock"></span>
   </div>
   <div class="bar-actions">
     <input id="opacity" class="opacity" type="range" min="0.45" max="1" step="0.05" value="1" title="Window opacity" aria-label="Window opacity">
+    <button id="record" class="icon rec" title="Record the call's audio, both sides, to a file" aria-label="Record the call" aria-pressed="false">
+      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4" class="dot" /><circle cx="8" cy="8" r="6.5" class="ring" /></svg></button>
     <button id="toggle" class="btn primary">Start listening</button>
     <button id="compact" class="icon" title="Compact view: answer only" aria-label="Compact view" aria-pressed="false">
       <svg viewBox="0 0 16 16"><path d="M3 5.5h10M3 8h10M3 10.5h6" /></svg></button>
@@ -43,6 +45,7 @@
     <div class="cue-actions">
       <button id="answerNow" class="btn mode" aria-pressed="false"><span>Answer what they said</span><kbd id="keyAnswer"></kbd></button>
       <button id="answerScreen" class="btn mode" aria-pressed="false"><span>Answer from the screen</span><kbd id="keyScreen"></kbd></button>
+      <label class="check auto" title="Write an answer by itself whenever they ask a question. Off, answers come when you press the button or its shortcut."><input id="autoAnswer" type="checkbox"> Auto</label>
       <button id="copy" class="btn quiet" hidden>Copy</button>
     </div>
     <form id="askForm" class="ask">
@@ -67,9 +70,8 @@
     <div class="panel" id="tab-transcript" role="tabpanel">
       <div class="lines" id="lines"></div>
       <p class="empty" id="linesEmpty">Nothing said yet. Start listening and both sides of the call appear here.</p>
-      <div class="panel-foot">
-        <button id="exportBtn" class="btn quiet" title="What both sides said, as a text file">Save transcript</button>
-        <button id="exportAllBtn" class="btn quiet" title="What both sides said and every answer suggested, as a text file">Save with answers</button>
+      <div class="panel-foot sticky">
+        <button id="exportBtn" class="btn quiet" title="What both sides said, every answer suggested and the summary, as a text file">Save transcript</button>
         <button id="resetBtn" class="btn quiet">Clear for a new meeting</button>
       </div>
     </div>
@@ -84,7 +86,7 @@
       <p class="hint" id="summaryState" hidden></p>
       <article class="summary" id="summaryText" aria-live="polite"></article>
       <p class="empty" id="summaryEmpty">No summary yet. When you stop listening, the call is written up here: what was covered, what they told you, how you did and what to follow up.</p>
-      <div class="panel-foot">
+      <div class="panel-foot sticky">
         <button id="summaryMake" class="btn quiet" title="Write the summary from the transcript as it stands">Write summary</button>
         <button id="summaryCopy" class="btn quiet" hidden>Copy</button>
         <button id="summarySave" class="btn quiet" hidden title="The summary as a text file">Save summary</button>
@@ -212,8 +214,8 @@
           <label>Your microphone <select id="s-mic"></select></label>
           <label>Their audio <select id="s-them"></select></label>
           <p class="hint" id="themHint"></p>
-          <label class="check"><input id="s-record" type="checkbox"> Record the meeting's audio, both sides, to a file</label>
-          <p class="hint">Saved in Documents, in "Meeting Copilot Recordings", as a .webm file that plays in a browser, VLC or the Windows media player. Tell the other side you are recording where the law or the meeting's rules require it. <button id="recFolder" class="btn quiet" type="button">Open the folder</button></p>
+          <label class="check"><input id="s-record" type="checkbox"> Record the call's audio, both sides, to a file (the record button in the title bar does the same)</label>
+          <p class="hint">Saved in Documents, in "Cue Recordings", as a .webm file that plays in a browser, VLC or the Windows media player. Tell the other side you are recording where the law or the meeting's rules require it. <button id="recFolder" class="btn quiet" type="button">Open the folder</button></p>
           <label>Read the screen every <select id="s-ocr-int"><option value="2">2 seconds</option><option value="4">4 seconds</option><option value="8">8 seconds</option><option value="15">15 seconds</option></select></label>
           <label>Screen text languages <input id="s-ocr-langs" type="text" placeholder="eng (add more with +, e.g. eng+chi_sim)"></label>
         </fieldset>
@@ -258,7 +260,7 @@
     <h2 id="pickerTitle">Which screen should be read?</h2>
     <p class="hint">Pick the meeting window, or the screen it is on. Slides and anything else shared there are read as text.</p>
     <div class="picker-grid" id="pickerGrid"></div>
-    <p class="empty" id="pickerEmpty" hidden>No screens or windows could be listed. On macOS, allow Screen Recording for Meeting Copilot in System Settings, then restart the app. You can still listen without reading a screen.</p>
+    <p class="empty" id="pickerEmpty" hidden>No screens or windows could be listed. On macOS, allow Screen Recording for Cue in System Settings, then restart the app. You can still listen without reading a screen.</p>
     <div class="panel-foot"><button id="pickNone" class="btn">Listen without reading a screen</button><button id="pickCancel" class="btn quiet">Cancel</button></div>
   </div>
 </div>

@@ -23,7 +23,7 @@ const REPO_FILES = [
 // committed utterance in turn (default: sttLines), { refuse: 'reason' } rejects the session
 // settings, { silent: true } never sends a final text, { closeAfter: n } drops the connection
 // after n utterances.
-function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92', live = {}, summary = '' } = {}) {
+function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-01T00:00:00Z', answer = 'I remove duplicates in two passes [1].\n- Exact match on tax ID\n- Fuzzy match at 0.92', live = {}, summary = '', firstTokenMs = 0 } = {}) {
   const log = { chat: [], stt: [], embed: [], search: [], github: [], tarballs: 0, live: { sessions: [], auth: [], appended: [], commits: 0, clears: 0 } };
   const state = { pushedAt };
   let sttIndex = 0;
@@ -67,8 +67,9 @@ function start({ sttLines = ['Hello there.'], sttBusy = 0, pushedAt = '2026-10-0
         const SUMMARY = '## Overview\nA first-round interview for a data engineering role, about ten minutes.\n\n## What was covered\n- **Duplicate customer records:** I described two passes, an exact match on tax ID and a fuzzy match at 0.92.\n- **Nightly loads:** I said Airflow with retries.\n\n## What they told me\n- The team is five people.\n\n## How I did\nWent well:\n- The duplicates answer was specific.\nWeak:\n- **Nightly loads:** "we just run it" gave no detail.\nBetter: Name the schedule, the retries and how a failed load is noticed.\n\n## Follow-ups\n- Me: send the portfolio link.';
         const words = (isSummary ? SUMMARY : fromScreen ? SQL : answer).split(/(?<= )/);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { role: 'assistant', reasoning: 'thinking...' } }] })}\n\n`);
-        let i = 0;
+        let i = 0, delayed = !firstTokenMs || isSummary;
         const tick = () => {
+          if (!delayed) { delayed = true; return setTimeout(tick, firstTokenMs); } // a model takes a moment before its first word
           if (i >= words.length) { res.write('data: [DONE]\n\n'); return res.end(); }
           // Split one event across two writes to exercise the stream parser.
           const ev = `data: ${JSON.stringify({ choices: [{ delta: { content: words[i++] } }] })}\n\n`;
