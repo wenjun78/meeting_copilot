@@ -696,12 +696,13 @@ function wireIpc() {
     return true;
   });
   handle('meeting:reset', () => { copilot.reset(); return true; });
-  // Everything from the call in one file: what was said, every answer suggested, the summary.
-  handle('meeting:export', async () => {
-    const text = copilot.transcriptText();
-    if (!text) throw new Error('Nothing has been said yet.');
+  // What was said, as a file; with answers: every answer the app wrote where it was suggested,
+  // how long answers took, and the summary of the call.
+  handle('meeting:export', async ({ answers = true } = {}) => {
+    const text = copilot.transcriptText({ answers });
+    if (!text) throw new Error(answers ? 'Nothing has been said or answered yet.' : 'Nothing has been said yet.');
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-    const r = await dialog.showSaveDialog(win, { defaultPath: `transcript-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
+    const r = await dialog.showSaveDialog(win, { defaultPath: `${answers ? 'meeting-with-answers' : 'transcript'}-${stamp}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] });
     if (r.canceled || !r.filePath) return null;
     // How much speech was recorded from each side: if this is far less than was said, the
     // audio is not reaching the app (volume, device), whatever the words above look like.
@@ -710,8 +711,8 @@ function wireIpc() {
     // And, with the answers, how long they took to appear and where that time went.
     const timed = copilot.history.map(h => h.timing).filter(Boolean);
     const mean = (pick) => (timed.reduce((n, t) => n + pick(t), 0) / timed.length / 1000).toFixed(1);
-    const speed = timed.length ? `\n(Answers began ${mean(t => t.heard + t.wait + t.first)} s after they stopped speaking, on average over ${timed.length}: ${mean(t => t.heard)} s to notice the pause and transcribe, ${mean(t => t.wait)} s waiting in case they carried on, ${mean(t => t.first)} s for search and the model's first words.)` : '';
-    const summary = copilot.summary ? `\n\n---\nSummary of the call\n\n${copilot.summary.text}` : '';
+    const speed = answers && timed.length ? `\n(Answers began ${mean(t => t.heard + t.wait + t.first)} s after they stopped speaking, on average over ${timed.length}: ${mean(t => t.heard)} s to notice the pause and transcribe, ${mean(t => t.wait)} s waiting in case they carried on, ${mean(t => t.first)} s for search and the model's first words.)` : '';
+    const summary = answers && copilot.summary ? `\n\n---\nSummary of the call\n\n${copilot.summary.text}` : '';
     fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)${speed}${summary}\n`);
     return r.filePath;
   });

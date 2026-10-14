@@ -238,7 +238,10 @@ $('resetBtn').addEventListener('click', async () => {
   state.summary = { status: 'idle', text: '' }; renderSummary();
 });
 $('exportBtn').addEventListener('click', async () => {
-  try { const p = await call('meeting:export'); if (p) toast(`Transcript saved to ${p}`); } catch (e) { fail(e); }
+  try { const p = await call('meeting:export', { answers: false }); if (p) toast(`Transcript saved to ${p}`); } catch (e) { fail(e); }
+});
+$('exportAllBtn').addEventListener('click', async () => {
+  try { const p = await call('meeting:export', { answers: true }); if (p) toast(`Transcript with answers saved to ${p}`); } catch (e) { fail(e); }
 });
 
 // ---- summary: the call written up when it ends ----------------------------------------

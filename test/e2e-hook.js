@@ -357,11 +357,11 @@ module.exports = async ({ app, win, copilot, kb, config, syncOrigin, autoSync, c
     await js(`document.querySelector('[data-tab=transcript]').click()`);
     win.setBounds({ x: 0, y: 0, width: 1500, height: 860 });
     await new Promise(r => setTimeout(r, 500));
-    // One save, with what was said and every answer in it; the buttons stay in view while the transcript scrolls.
-    const saved = copilot.transcriptText();
+    // Two ways to save: what was said, or that with every answer the app wrote; the buttons stay in view while the transcript scrolls.
+    const plain = copilot.transcriptText({ answers: false }), full = copilot.transcriptText();
     const foot = await js(`(() => { const f = document.querySelector('#tab-transcript .panel-foot'); return { sticky: getComputedStyle(f).position, buttons: [...f.querySelectorAll('button')].map(b => b.textContent) }; })()`);
-    step('save', { ...foot, hasAnswers: /Suggested answer/.test(saved), hasSpeech: /Them: /.test(saved) });
-    if (foot.sticky !== 'sticky' || foot.buttons.join('|') !== 'Save transcript|Clear for a new meeting' || !/Suggested answer/.test(saved) || !/Them: /.test(saved)) throw new Error('the transcript save is not as expected');
+    step('save choices', { ...foot, plainHasAnswers: /Suggested answer/.test(plain), fullHasAnswers: /Suggested answer/.test(full), hasSpeech: /Them: /.test(plain) });
+    if (foot.sticky !== 'sticky' || foot.buttons.join('|') !== 'Save transcript|Save with answers|Clear for a new meeting' || /Suggested answer/.test(plain) || !/Suggested answer/.test(full) || !/Them: /.test(plain)) throw new Error('the transcript saves are not as expected');
 
     // Conversation log: earlier answers sit under the current one in the wide layout, every
     // answer is in the transcript where it was given, and the saved log carries them too.
