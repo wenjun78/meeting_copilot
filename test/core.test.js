@@ -640,14 +640,14 @@ test('sections: everything outside Portfolio is sent with every answer, in secti
 test('the send budget cuts long notes and reports what goes out; lean mode sends less', async () => {
   const notes = [
     { slot: 'instructions', title: 'Instructions', text: 'i'.repeat(500) },
-    { slot: 'cv', title: 'CV', text: 'c'.repeat(8000), chars: 30000 },
-    { title: 'repo note', text: 'r'.repeat(8000) },
+    { slot: 'cv', title: 'CV', text: 'c'.repeat(16000), chars: 30000 },
+    { title: 'repo note', text: 'r'.repeat(16000) },
     { slot: 'about', title: 'About me', text: 'a'.repeat(1000) },
-    { slot: 'jd', title: 'JD', text: 'j'.repeat(7000) },
+    { slot: 'jd', title: 'JD', text: 'j'.repeat(15000) },
   ];
   const full = planPinned(notes);
-  assert.deepEqual(full.map(n => [n.title, n.sent]), [['About me', 1000], ['CV', 8000], ['JD', 7000], ['Instructions', 500], ['repo note', 3500]]);
-  assert.equal(full.reduce((n, x) => n + x.sent, 0), 20000);
+  assert.deepEqual(full.map(n => [n.title, n.sent]), [['About me', 1000], ['CV', 16000], ['JD', 15000], ['Instructions', 500], ['repo note', 7500]]);
+  assert.equal(full.reduce((n, x) => n + x.sent, 0), 40000);
   const lean = planPinned(notes, { total: 6000, perNote: 2500 });
   assert.deepEqual(lean.map(n => n.sent), [1000, 2500, 2500, 0, 0]);
 
