@@ -21,6 +21,12 @@ const { cleanTranscript, languageToForce, speechLanguage } = require('./src/llm'
 const { SLOTS, NOTE, slotById, planPinned, moveLooseFilesIntoSections, movePapersToPublications } = require('./src/slots');
 
 if (process.env.MC_USER_DATA) app.setPath('userData', process.env.MC_USER_DATA);
+else {
+  // The app was called Meeting Copilot up to version 0.3: its settings, keys, notes and files
+  // are carried over to the new name, once, the first time this version runs.
+  const now = app.getPath('userData'), before = path.join(path.dirname(now), 'Meeting Copilot');
+  if (!fs.existsSync(now) && fs.existsSync(before)) { try { fs.renameSync(before, now); } catch { /* left where it was: the app starts afresh */ } }
+}
 if (process.platform === 'win32') app.setAppUserModelId('io.github.wenjun78.meetingcopilot');
 
 // One copy at a time: a second launch (double-clicking the shortcut again) brings the open window forward.
@@ -46,7 +52,7 @@ function createWindow() {
     ? saved : { width: 440, height: Math.min(680, area.height - 80), x: area.x + area.width - 460, y: area.y + 40 };
   win = new BrowserWindow({
     ...bounds, minWidth: 360, minHeight: 150,
-    frame: false, show: false, backgroundColor: config.get().ui.theme === 'light' ? '#F3F5F7' : '#1B2530', title: 'Meeting Copilot',
+    frame: false, show: false, backgroundColor: config.get().ui.theme === 'light' ? '#F3F5F7' : '#1B2530', title: 'Cue',
     alwaysOnTop: true, fullscreenable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
@@ -154,8 +160,8 @@ const transcribeRecording = (wav) => {
 };
 
 // ---- recordings ---------------------------------------------------------------
-// Kept where the user will find them: Documents/Meeting Copilot Recordings.
-const recordingsDir = () => (process.env.MC_USER_DATA ? path.join(app.getPath('userData'), 'recordings') : path.join(app.getPath('documents'), 'Meeting Copilot Recordings'));
+// Kept where the user will find them: Documents/Cue Recordings (earlier versions used Documents/Meeting Copilot Recordings).
+const recordingsDir = () => (process.env.MC_USER_DATA ? path.join(app.getPath('userData'), 'recordings') : path.join(app.getPath('documents'), 'Cue Recordings'));
 let recording = ''; // the file being written, while a meeting is recorded
 
 // ---- knowledge sources ------------------------------------------------------
@@ -595,7 +601,7 @@ function wireIpc() {
   handle('capture:sources', async () => {
     const own = win.getMediaSourceId();
     const list = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 200 } });
-    return list.filter(s => s.id !== own && s.name !== 'Meeting Copilot')
+    return list.filter(s => s.id !== own && s.name !== 'Cue')
       .map(s => ({ id: s.id, name: s.name, kind: s.id.startsWith('screen') ? 'screen' : 'window', thumbnail: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL() }));
   });
   handle('capture:select', async (sourceId) => {
@@ -690,6 +696,8 @@ function wireIpc() {
     return true;
   });
   handle('meeting:reset', () => { copilot.reset(); return true; });
+  // What was said, as a file; with answers: every answer the app wrote where it was suggested,
+  // how long answers took, and the summary of the call.
   handle('meeting:export', async ({ answers = true } = {}) => {
     const text = copilot.transcriptText({ answers });
     if (!text) throw new Error(answers ? 'Nothing has been said or answered yet.' : 'Nothing has been said yet.');
@@ -704,7 +712,8 @@ function wireIpc() {
     const timed = copilot.history.map(h => h.timing).filter(Boolean);
     const mean = (pick) => (timed.reduce((n, t) => n + pick(t), 0) / timed.length / 1000).toFixed(1);
     const speed = answers && timed.length ? `\n(Answers began ${mean(t => t.heard + t.wait + t.first)} s after they stopped speaking, on average over ${timed.length}: ${mean(t => t.heard)} s to notice the pause and transcribe, ${mean(t => t.wait)} s waiting in case they carried on, ${mean(t => t.first)} s for search and the model's first words.)` : '';
-    fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)${speed}\n`);
+    const summary = answers && copilot.summary ? `\n\n---\nSummary of the call\n\n${copilot.summary.text}` : '';
+    fs.writeFileSync(r.filePath, `${text}\n\n(Speech recorded: them ${side('them')}; you ${side('you')}.)${speed}${summary}\n`);
     return r.filePath;
   });
 

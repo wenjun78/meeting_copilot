@@ -1,7 +1,7 @@
 {
-  "name": "meeting-copilot",
-  "version": "0.3.8",
-  "description": "Floating meeting overlay: live two-sided transcript, shared-screen OCR, and answer suggestions grounded in your GitHub repos and API.",
+  "name": "cue",
+  "version": "0.4.0",
+  "description": "Cue: a small window beside your call that transcribes both sides, reads the shared screen, suggests what to say from your own material, and writes the call up when it ends.",
   "main": "main.js",
   "license": "MIT",
   "scripts": {
@@ -29,7 +29,7 @@
   "author": "wjun78",
   "build": {
     "appId": "io.github.wenjun78.meetingcopilot",
-    "productName": "Meeting Copilot",
+    "productName": "Cue",
     "asar": false,
     "files": [
       "main.js",
@@ -71,11 +71,11 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Meeting Copilot",
-      "artifactName": "Meeting-Copilot-Setup-${version}.${ext}"
+      "shortcutName": "Cue",
+      "artifactName": "Cue-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "Meeting-Copilot-${version}-portable.${ext}"
+      "artifactName": "Cue-${version}-portable.${ext}"
     },
     "mac": {
       "target": "dmg",

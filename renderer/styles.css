@@ -1,4 +1,4 @@
-/* Meeting Copilot: a dark, quiet shell around one bright cue card.
+/* Cue: a dark, quiet shell around one bright cue card.
    The card is the only light surface, so the eye lands on the answer first. */
 :root {
   --shell: #1b2530;
@@ -150,6 +150,15 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .source:hover { border-color: var(--muted); color: var(--text); }
 .cue-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; }
 .cue-actions #copy { margin-left: auto; }
+.cue-actions .auto { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); margin: 0 2px; cursor: pointer; user-select: none; }
+.cue-actions .auto input { margin: 0; }
+/* The record button: a hollow ring until a recording runs, then a filled red dot. */
+.icon.rec .dot { fill: transparent; stroke: none; }
+.icon.rec .ring { fill: none; }
+.icon.rec[aria-pressed="true"] .ring { stroke: var(--alert); }
+.icon.rec.on .dot { fill: var(--alert); animation: rec-pulse 1.6s ease-in-out infinite; }
+.icon.rec.on .ring { stroke: var(--alert); }
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 /* The two ways to ask for an answer. The one the answer on the card came from is filled, so
    it is plain at a glance which was used; each shows its shortcut. */
 .btn.mode { display: inline-flex; align-items: center; gap: 8px; }

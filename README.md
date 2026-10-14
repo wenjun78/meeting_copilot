@@ -1,16 +1,19 @@
-# Meeting Copilot
+# Cue
 
-A small always-on-top window that sits beside Teams, Zoom, Meet or any other
-call. It transcribes both sides, reads the shared screen, and when the other
-side asks something it drafts what you could say, grounded in your own GitHub
-repositories, documents and search API.
+Your cue, during the call. A small always-on-top window that sits beside
+Teams, Zoom, Meet or any other call. It transcribes both sides, reads the
+shared screen, and when the other side asks something it drafts what you
+could say, grounded in your own notes, CV, documents, GitHub repositories and
+search API. When the call ends it writes the whole thing up.
+
+(Called Meeting Copilot up to version 0.3. Settings and notes carry over.)
 
 It does not join the meeting as a bot and needs no Teams or Zoom admin
 approval: it listens to your computer's audio and looks at your screen.
 
 ## Install it (Windows)
 
-Download **Meeting-Copilot-Setup** from the
+Download **Cue-Setup** from the
 [Releases page](https://github.com/wenjun78/meeting_copilot/releases) and run
 it. It installs for your user only (no admin rights), adds Start menu and
 desktop shortcuts, and opens like any other app. The **portable** file runs
@@ -55,12 +58,12 @@ npm start
 
 | | |
 |---|---|
-| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses; with a live speech model their line fills in while they speak, with each answer where it was given. "Save transcript" writes what was said to a text file, "Save with answers" adds every answer |
+| Transcript | "Them" (system audio) and "You" (microphone), cut at natural pauses; with a live speech model their line fills in while they speak, with each answer where it was given. "Save transcript" writes what was said to a text file; "Save with answers" adds every answer the app wrote where it was suggested, how long answers took, and the summary |
 | Summary | When you stop listening, the call is written up from its transcript: an overview, every question they raised and what you answered, what they told you, the questions you asked, how you did (what went well, what was weak and what to say next time, for an interview or other call where you were assessed), follow-ups, and questions worth adding to your prepared answers. One extra request to the chat model per call; "Write it again", "Copy" and "Save summary" are in the Summary tab. Calls of only a few lines are not summarised. Turn it off under Settings > Answers |
 | Earlier answers | In the wide or maximised window, under the current answer: every earlier answer of the meeting, to open again |
-| Recording | Optional (Settings > Audio and screen): the meeting's audio, both sides, kept as a .webm file in Documents/Meeting Copilot Recordings. Tell the other side where the law or the meeting's rules require it |
+| Recording | The record button in the title bar (or Settings > Audio and screen): the call's audio, both sides, kept as a .webm file in Documents/Cue Recordings. Tell the other side where the law or the meeting's rules require it |
 | Screen | Text read from the shared screen every few seconds, only when it changes |
-| Answers | Written automatically when they ask a question; one or two sentences to say, then supporting points, with numbered sources you can click |
+| Answers | Written automatically when they ask a question (the "Auto" tick beside the answer buttons turns this off, so answers come only on the button or its shortcut); one or two sentences to say, then supporting points, with numbered sources you can click. When one of your prepared answers fits, it is shown the moment it is found, to read while the reply is written from it |
 | Ask | Type your own question, or "Answer from the screen" for what is being shown, including SQL and code tasks |
 | Window | Light or dark theme. Drag by the title bar, resize from any edge, minimise, maximise, compact (answer only), adjustable opacity |
 
@@ -115,6 +118,12 @@ detail), the shared-screen text, and the best-matching passages. That
 is why "make it shorter" or "can you elaborate?" works. "Clear for a new
 meeting" forgets the conversation and the earlier suggestions; your notes
 stay.
+
+Each request opens with the parts that do not change between questions (the
+always-sent notes, then your prepared answers in their own order) and only
+then the parts that do. Services that keep a prefix they have already seen
+(OpenAI does, for requests over about a thousand tokens) then skip re-reading
+the unchanged part, so the reply starts sooner and costs less.
 
 ## Which model service
 

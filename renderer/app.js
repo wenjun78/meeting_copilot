@@ -78,7 +78,7 @@ function renderIdle() {
   const hasKb = state.kb.chunks > 0;
   card.className = 'card idle';
   card.replaceChildren(
-    el('strong', { text: state.listening ? 'Listening. Answers appear here when they ask something.' : 'Answers appear here during your call.' }),
+    el('strong', { text: !state.listening ? 'Answers appear here during your call.' : state.cfg.autoAnswer === 'questions' ? 'Listening. Answers appear here when they ask something.' : `Listening. Press ${state.labels && state.labels.answer ? state.labels.answer : 'the button'} to answer what they said.` }),
     el('ol', {},
       el('li', { class: hasKey ? 'done' : '', text: 'Add your API key under Settings.' }),
       el('li', { class: hasKb ? 'done' : '', text: 'Fill in About me, CV and JD under Knowledge.' }),
@@ -98,6 +98,7 @@ function renderAnswer() {
       : `They said: ${tailOf(a.question)}`;
   $('asked').className = 'asked' + (a.mode === 'typed' || a.mode === 'screen' ? ' mine' : '');
   if (a.status === 'error') { card.className = 'card fail'; card.textContent = a.error; }
+  else if (!a.text && a.prepared) { card.className = 'card stale'; renderAnswerText(card, a.prepared.a, []); card.prepend(el('p', { class: 'updating', text: `Your prepared answer, while the reply is written from it` })); }
   else if (!a.text && a.stale) { card.className = 'card stale'; renderAnswerText(card, a.stale, a.staleSources); card.prepend(el('p', { class: 'updating', text: 'They added to the question. Updating the answer' })); }
   else if (!a.text) { card.className = 'card wait'; card.textContent = a.sources.length ? 'Writing your answer' : 'Looking through your sources'; }
   else { card.className = 'card'; renderAnswerText(card, a.text); }
@@ -119,6 +120,7 @@ window.mc.on('answer', (e) => {
   if (e.type === 'start') state.answer = { id: e.id, text: '', sources: [], status: 'working', question: e.question, mode: e.mode,
     stale: a.status === 'working' && e.mode === 'auto' ? (a.text || a.stale || '') : '', staleSources: a.status === 'working' ? (a.text ? a.sources : a.staleSources || []) : [] };
   else if (e.id < a.id) return; // a newer answer has replaced this one
+  else if (e.type === 'prepared') a.prepared = { q: e.q, a: e.a };
   else if (e.type === 'sources') a.sources = e.sources;
   else if (e.type === 'delta') a.text += e.text;
   else if (e.type === 'done') { a.status = 'done'; a.text = e.text || a.text; logAnswer(a); }
@@ -164,6 +166,14 @@ function renderLog() {
   }));
 }
 
+// Whether answers come by themselves when they ask something, or only on the button.
+function renderAuto() { $('autoAnswer').checked = state.cfg.autoAnswer === 'questions'; }
+$('autoAnswer').addEventListener('change', async () => {
+  const on = $('autoAnswer').checked;
+  try { const r = await call('config:set', { autoAnswer: on ? 'questions' : 'off' }); state.cfg = r.config; } catch (e) { fail(e); }
+  $('s-auto').checked = on;
+  if (state.answer.status === 'idle') renderIdle();
+});
 const ask = (req) => call('answer:ask', req).catch(fail);
 $('answerNow').addEventListener('click', () => ask({ mode: 'manual' }));
 // Reads the screen as it is at this moment, then answers from it. Anything typed in the
@@ -331,11 +341,37 @@ function setListening(on) {
   updateSetupMode();
 }
 
+// The record button shows three states: off, armed (records once listening starts), recording.
+function renderRecord() {
+  const b = $('record'), on = capture.recording, armed = !!(state.cfg.capture && state.cfg.capture.record);
+  b.classList.toggle('on', on);
+  b.setAttribute('aria-pressed', String(on || armed));
+  b.title = on ? 'Recording this call. Click to stop recording' : armed ? 'Recording is on: starts with the call. Click to turn it off' : "Record the call's audio, both sides, to a file";
+  $('recState').hidden = !on;
+}
+$('record').addEventListener('click', async () => {
+  if (state.listening && capture.recording) {
+    await capture.stopRecording();
+    try { const file = await call('rec:stop'); if (file) toast(`Recording saved: ${file}`); } catch (e) { fail(e); }
+    await call('config:set', { capture: { record: false } }).then(r => { state.cfg = r.config; }).catch(fail);
+  } else if (state.listening) {
+    const problem = capture.startRecording();
+    if (problem) toast(problem, 'error');
+    else await call('config:set', { capture: { record: true } }).then(r => { state.cfg = r.config; }).catch(fail);
+  } else {
+    const record = !(state.cfg.capture && state.cfg.capture.record);
+    await call('config:set', { capture: { record } }).then(r => { state.cfg = r.config; }).catch(fail);
+    toast(record ? 'Recording is on: it starts when you start listening.' : 'Recording is off.');
+  }
+  $('s-record').checked = !!(state.cfg.capture && state.cfg.capture.record);
+  renderRecord();
+});
+
 // Stops listening; a recording in progress is closed and its place shown.
 async function stopListening() {
   await capture.stop();
   setListening(false);
-  $('recState').hidden = true;
+  renderRecord();
   try { const file = await call('rec:stop'); if (file) toast(`Recording saved: ${file}`); } catch (e) { fail(e); }
 }
 async function begin(sourceId) {
@@ -347,7 +383,7 @@ async function begin(sourceId) {
     // With a live speech model their words are streamed as they speak; otherwise each utterance is sent when it ends.
     const live = await call('stt:live').catch(() => false);
     const res = await capture.start({ live, micDeviceId: c.micDeviceId, themSource: c.themSource || 'system', wantScreen: !!sourceId, systemAudio, ocrIntervalSec: c.ocrIntervalSec, record: !!c.record });
-    $('recState').hidden = !res.recording;
+    renderRecord();
     for (const p of res.problems) toast(p, 'error');
     document.querySelector('.meter.them').classList.toggle('off', !res.them);
     document.querySelector('.meter.you').classList.toggle('off', !res.mic);
@@ -756,6 +792,7 @@ function fillSettings() {
   $('s-stt-model').value = c.stt.model; $('s-stt-lang').value = ['en', 'zh'].includes(c.stt.language) ? c.stt.language : 'en+zh'; $('s-stt-vocab').value = c.stt.vocabulary;
   $('s-stt-base').value = c.stt.baseUrl; $('s-stt-key').placeholder = keyHint(s.sttKey);
   $('s-auto').checked = c.autoAnswer === 'questions'; $('s-length').value = c.answerLength;
+  renderAuto(); renderRecord();
   $('s-summary').checked = c.summaryOnStop !== false;
   $('s-record').checked = !!c.capture.record;
   $('s-ocr-int').value = String(c.capture.ocrIntervalSec); $('s-ocr-langs').value = c.capture.ocrLangs;
@@ -881,6 +918,12 @@ $('settings').addEventListener('submit', async (e) => {
     const r = await call('config:set', patch);
     state.cfg = r.config; state.saved = r.saved; state.labels = r.labels;
     fillSettings(); fillDevices();
+    // The recording setting takes effect at once; other audio settings on the next call.
+    if (state.listening && !!state.cfg.capture.record !== capture.recording) {
+      if (state.cfg.capture.record) { const problem = capture.startRecording(); if (problem) toast(problem, 'error'); }
+      else { await capture.stopRecording(); try { const file = await call('rec:stop'); if (file) toast(`Recording saved: ${file}`); } catch (e) { fail(e); } }
+      renderRecord();
+    }
     toast(state.listening ? 'Settings saved. Audio changes apply the next time you start listening.' : 'Settings saved');
     if (state.answer.status === 'idle') renderIdle();
   } catch (err) { fail(err); }

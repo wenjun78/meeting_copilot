@@ -329,6 +329,8 @@ class Copilot extends EventEmitter {
         .map(p => ({ ...p, found: found.has(p.q) }))
         .sort((a, b) => ((b.match ? 2 : 0) + (b.found ? 1 : 0)) - ((a.match ? 2 : 0) + (a.found ? 1 : 0)));
       const refs = [...live, ...local.filter(r => !r.qa)].slice(0, cfg.answerContext === 'lean' ? 3 : 9);
+      // A prepared answer that fits is shown at once, to read while the reply is being written from it.
+      if (mode !== 'screen' && prepared.length && prepared[0].match) this.emit('answer', { type: 'prepared', id, q: prepared[0].q, a: prepared[0].a });
       this.emit('answer', {
         type: 'sources', id,
         sources: [
@@ -414,7 +416,7 @@ class Copilot extends EventEmitter {
       'Grounding:',
       '- The pinned notes and reference material are the user\'s own: their notes, CV, repositories, documents and API. Prefer them over general knowledge and cite references inline as [1], [2].',
       '- Papers, reports, projects and code in the user\'s material are the user\'s own work. Speak of them in the first person ("In my paper I ...", "we" for co-authored work), never as "the publication" or "the author". Give the specifics the references contain: the method, the data and its size, the numbers.',
-      '- "Answers I prepared" are replies the user wrote in advance for questions they expect; what they state is the user\'s own fact. When what is asked is the same question as one of them, or close to it in meaning even if worded differently, build the reply on that prepared answer: keep its facts, examples, numbers and stance, fit it to the format and to exactly what was asked, and do not swap in other material or add a "Check:" line for what it states. When two apply, combine them. When none is close to the question, leave them out.',
+      '- "Answers I prepared" are replies the user wrote in advance for questions they expect; what they state is the user\'s own fact. When what is asked is the same question as one of them, or close to it in meaning even if worded differently, build the reply on that prepared answer: keep its facts, examples, numbers and stance, fit it to the format and to exactly what was asked, and do not swap in other material or add a "Check:" line for what it states. When two apply, combine them. When none is close to the question, leave them out. The ones closest to what was asked are named under "Closest prepared answers", just before the question: start from those.',
       '- "Questions I want to ask the other side" in the pinned notes are the user\'s own questions for the people they are meeting. When the other side invites questions ("do you have any questions for us?", "anything you would like to ask?") or the user asks what to ask: write one short opening line, then every one of those questions that the conversation has not already answered, each as its own bullet, in the user\'s order and close to the user\'s wording (the limits on bullets and words do not apply to this reply). Leave out the ones the other side has already answered and end the list with one line starting "Skipped:" naming them in a few words each with what was said ("Skipped: team size (she said five)"); omit that line when none were answered. Then, under a line "Also worth asking:", add one or two further questions that follow from something the other side said in this conversation. Never answer these questions yourself, and do not bring them up at any other time.',
       '- What the user has done (experience, projects, results, numbers, dates, employers, qualifications): answer only from the notes and references. If they do not cover it, do not invent it. Give the closest true experience from the notes and say how it relates, or an honest line the user can say ("I have not used X in production; the closest is ..."), and end with a line starting "Check:" naming what to confirm.',
       '- Questions with no fact to look up (where do you see yourself in five years, why this role, why this company, strengths and weaknesses, what motivates you, how do you handle pressure or conflict): write a specific, believable answer in the user\'s voice that follows from their background and, when there is a job description, from what the role offers. Build on the direction their work already shows. Do not invent events, employers, numbers or credentials to support it. No "Check:" line for these.',
@@ -453,28 +455,41 @@ class Copilot extends EventEmitter {
     }
     const earlier = exchanges.join('\n\n');
     const parts = [];
+    // The request opens with what is the same from one answer to the next (the notes, the
+    // prepared answers in their list's order) and only then what changes (the conversation,
+    // the references, the question): services keep a prefix they have seen before, so the
+    // unchanged part is not read again, and the reply starts sooner.
     // Notes sent with every answer: About me, CV, JD, Instructions, then pinned files from other sources.
     const notes = planPinned(this.kb.pinned ? this.kb.pinned() : [], lean ? { total: 6000, perNote: 2500 } : undefined)
       .filter(n => n.sent > 0).map(n => `### ${n.title}\n${n.text.slice(0, n.sent)}`);
     if (notes.length) parts.push(`Pinned notes from my sources (always included: who I am, my CV, the job description, instructions for this meeting):\n${notes.join('\n\n')}`);
+    // Prepared answers: all of them, in the list's order, as many as fit; the closest ones are
+    // named before the question (with their text, when they did not fit here). In lean mode
+    // only the closest few, there.
+    const sent = new Set();
+    if (!lean) {
+      const all = [];
+      let space = 16000;
+      for (const p of (this.kb.prepared ? this.kb.prepared() : [])) {
+        const item = `Q: ${p.q}\nA: ${p.a.slice(0, 1200)}`;
+        if (item.length > space) break; // the first so many, so the block stays the same from one answer to the next
+        all.push(item); sent.add(p.q); space -= item.length;
+      }
+      if (all.length) parts.push(`Answers I prepared for questions I expect (my whole list):\n${all.join('\n\n')}`);
+    }
     if (convo) parts.push(`Conversation so far (latest last):\n${convo}`);
     if (earlier) parts.push(`Earlier in this meeting you suggested these answers (most recent last):\n${earlier}`);
     if (this.screenText) parts.push(`Text on the shared screen (OCR):\n${this.screenText.slice(0, mode === 'screen' ? (lean ? 2500 : 5000) : (lean ? 600 : 1800))}`);
-    // Prepared answers, closest first, as many as fit. In lean mode only the closest few.
-    const ready = [];
-    // Ranked by meaning the right one is near the top, so fewer are needed (a shorter request
-    // is answered sooner); ranked by wording alone, more are sent to be safe.
-    let space = lean ? 1500 : prepared.some(x => x.byMeaning) ? 9000 : 16000;
-    for (const p of prepared) {
-      const item = `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`;
-      if (item.length > space) { if (ready.length) break; continue; }
-      ready.push(item); space -= item.length;
-      if (lean && ready.length >= 2) break;
-    }
-    if (ready.length) parts.push(`Answers I prepared for questions I expect (the likeliest matches first):\n${ready.join('\n\n')}`);
     if (refs.length) {
       parts.push('Reference material:\n' + refs.map((r, i) => `[${i + 1}] ${r.title}${r.path ? ` (${r.path})` : ''}\n${r.text.slice(0, lean ? 800 : 1500)}`).join('\n\n'));
     } else parts.push('Reference material: none found for this question.');
+    const closest = [];
+    for (const p of prepared) {
+      if (!p.match && !lean) break; // lean mode sends the closest two even without a match
+      closest.push(sent.has(p.q) ? `Q: ${p.q}` : `Q: ${p.q}\nA: ${p.a.slice(0, lean ? 600 : 1200)}`);
+      if (closest.length >= (lean ? 2 : 3)) break;
+    }
+    if (closest.length) parts.push(`Closest prepared answers to what was asked (likeliest first):\n${closest.join('\n\n')}`);
     parts.push(mode === 'screen'
       ? `What I need: ${asked}\nBase the reply on the shared-screen text above. It is raw OCR of the whole screen, so ignore menus, toolbars, participant names and other clutter, and repair obvious OCR slips in names and code.`
       : mode === 'typed' ? `My question: ${asked}`
@@ -586,7 +601,7 @@ class Copilot extends EventEmitter {
   }
 
   // The conversation as text, in order: what each side said and, unless answers is false,
-  // every answer suggested.
+  // every answer suggested. (The summary of the call is in this.summary.)
   transcriptText({ answers: withAnswers = true } = {}) {
     const at = (t) => `[${new Date(t).toLocaleTimeString()}]`;
     const said = this.entries.filter(e => !e.pending).map(e => ({ t: e.t, text: `${at(e.t)} ${e.who === 'them' ? 'Them' : 'You'}: ${e.text}` }));
