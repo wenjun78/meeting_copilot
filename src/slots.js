@@ -24,7 +24,9 @@ const slotByDir = (dir) => SLOTS.find(s => s.dir === dir) || null;
 // How much of each always-sent note fits. Notes are taken in section order (About me, CV,
 // JD, Instructions, then pinned files from other sources), each cut to `perNote`, until
 // `total` characters are used. -> the same notes with `sent` (characters that go out).
-function planPinned(notes, { total = 20000, perNote = 8000 } = {}) {
+// The notes open every request in the same order, so a service that keeps a prefix it has
+// seen reads them once and reuses them: the budget can be generous without slowing answers.
+function planPinned(notes, { total = 40000, perNote = 16000 } = {}) {
   const order = (n) => { const i = SLOTS.findIndex(s => s.id === n.slot); return i < 0 ? SLOTS.length : i; };
   let room = total;
   // Within a section, what the user typed comes before the files they added.

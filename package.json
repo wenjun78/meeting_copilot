@@ -1,6 +1,6 @@
 {
   "name": "cue",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Cue: a small window beside your call that transcribes both sides, reads the shared screen, suggests what to say from your own material, and writes the call up when it ends.",
   "main": "main.js",
   "license": "MIT",

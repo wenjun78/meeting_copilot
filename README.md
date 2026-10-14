@@ -187,9 +187,10 @@ Each section takes typed or pasted text, files chosen with a click, and
 files dropped onto it. Switching sections saves what you typed. Files are
 copied into the app's own folder, so they keep working if the originals move.
 
-**Sent with every answer** has a budget: the first 8,000 characters of each
-note or file, 20,000 in total, in the order About me, CV, JD, Instructions,
-Questions to ask, Publications.
+**Sent with every answer** has a budget: the first 16,000 characters of each
+note or file, 40,000 in total, in the order About me, CV, JD, Instructions,
+Questions to ask, Publications. (The notes open every request, so a service
+with prefix caching reads them once; see "What an answer remembers".)
 Anything longer is still searched. **Equipped** shows exactly how much of
 each note goes out, lists every searchable file with its passages, opens any
 of them to show the text as the app read it, and lets you try a question.

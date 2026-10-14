@@ -502,7 +502,7 @@ function renderSlot(info) {
 function slotState() {
   const n = $('slotText').value.trim().length;
   const dirty = $('slotText').value.trim() !== kbView.savedText;
-  $('slotState').textContent = dirty ? 'Not saved yet' : n ? `Saved, ${num(n)} characters${n > 8000 ? '. The first 8,000 are sent with every answer; the rest is searched.' : ''}` : 'Nothing typed';
+  $('slotState').textContent = dirty ? 'Not saved yet' : n ? `Saved, ${num(n)} characters${n > 16000 ? '. The first 16,000 are sent with every answer; the rest is searched.' : ''}` : 'Nothing typed';
   $('slotSave').disabled = !dirty;
 }
 async function saveSlot(quiet) {
